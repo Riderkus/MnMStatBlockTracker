@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<!--
+    Stat Block Tracker — page skeleton.
+
+    This file contains only the fixed structure. Anything repeated (the ability
+    boxes, the condition chips, the list of blocks, the power rows) is generated
+    by app.js from the schema arrays at the top of that file.
+
+    Every element with an id="" is something app.js looks up by that id, so
+    renaming an id here means renaming it there too.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+
+    <!-- Tells phones to use their real screen width instead of pretending to be
+         a 980px desktop. viewport-fit=cover lets the header extend under the
+         notch / status bar on iPhones; style.css pads it back out. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+
+    <!-- Colour of the browser chrome / status bar on Android when installed. -->
+    <meta name="theme-color" content="#142448">
+
+    <!-- iOS-specific: allow "Add to Home Screen" to open the app without Safari's UI. -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+    <title>Stat Block Tracker</title>
+
+    <!-- The manifest describes the app to the OS (name, icons, colours) so it
+         can be installed like a native app. See README.md for each field. -->
+    <link rel="manifest" href="manifest.json">
+
+    <!-- Browser tab icon. SVG scales to any size. -->
+    <link rel="icon" href="icon.svg" type="image/svg+xml">
+
+    <!-- iOS ignores the manifest icons and uses this PNG for the home screen. -->
+    <link rel="apple-touch-icon" href="icon-192.png">
+
+    <!-- Teko is the stand-in for Agency FB on devices that don't have it
+         (phones, Macs). preconnect speeds up the font download; if there is
+         no network the stylesheet's font stack falls back to Arial Narrow. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Teko:wght@400;500;700&display=swap">
+
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- ================================================================
+         TOP BAR — title plus the three global actions.
+         ================================================================ -->
+    <header class="topbar">
+        <h1>Stat Block Tracker</h1>
+        <div class="topbar-actions">
+            <button id="btn-new" class="btn primary" type="button">+ New</button>
+            <button id="btn-export" class="btn" type="button" title="Download all blocks as .json">Export</button>
+            <button id="btn-import" class="btn" type="button" title="Load blocks from a .json file">Import</button>
+
+            <!-- File pickers can't be styled, so this one is hidden and the
+                 Import button above "clicks" it from JavaScript. accept=""
+                 filters the picker to .json files. -->
+            <input id="file-import" type="file" accept=".json,application/json" hidden>
+        </div>
+    </header>
+
+    <!-- ================================================================
+         MAIN LAYOUT — a two-column grid on wide screens, one column on
+         phones. app.js adds class="editing" to <main> while a block is
+         open; style.css uses that to hide the sidebar on phones.
+         ================================================================ -->
+    <main class="layout">
+
+        <!-- LEFT COLUMN: the list of saved blocks. -->
+        <aside class="sidebar" id="sidebar">
+            <input id="search" class="search" type="search" placeholder="Search by name…" autocomplete="off">
+
+            <!-- app.js fills this <ul> with one <li class="block-item"> per block. -->
+            <ul id="block-list" class="block-list"></ul>
+
+            <!-- Shown only while there are no blocks at all. -->
+            <p id="empty-hint" class="hint">No stat blocks yet. Press <strong>+ New</strong> to create one, or <strong>Import</strong> a .json file.</p>
+        </aside>
+
+        <!-- RIGHT COLUMN: the editor. Starts hidden; app.js un-hides it when a
+             block is selected. -->
+        <section class="editor" id="editor" hidden>
+
+            <!-- Every input inside this form has a name="" attribute. app.js
+                 reads and writes them through form.elements.NAME, and a single
+                 "input" listener on the form catches edits to all of them.
+                 autocomplete="off" stops the browser suggesting old values. -->
+            <form id="block-form" autocomplete="off">
+
+                <!-- Name and Power Level side by side. -->
+                <div class="editor-head">
+                    <input id="f-name" name="name" class="name-input" type="text" placeholder="Character name" required>
+                    <label class="pl-label">PL <input id="f-pl" name="pl" type="number" min="0" max="999" step="1" inputmode="numeric" value="10"></label>
+                    <!-- Opens the rules reference popup over the stat block. -->
+                    <button type="button" class="btn" id="btn-checks" title="Rules reference for checks and conditions">Checks</button>
+                </div>
+
+                <!-- <fieldset> + <legend> is the semantic way to group related
+                     inputs under a heading; style.css draws the box. -->
+                <fieldset>
+                    <legend>Abilities</legend>
+                    <!-- Filled by app.js: one box per entry in the ABILITIES array. -->
+                    <div class="grid grid-8" id="abilities"></div>
+                </fieldset>
+
+                <fieldset>
+                    <legend>Defenses</legend>
+                    <!-- Filled by app.js from the DEFENSES array. -->
+                    <div class="grid grid-5" id="defenses"></div>
+                    <!-- Initiative can be negative; app.js adds a +/- button after it that shows
+                         while the field has the cursor on touch screens. -->
+                    <label class="inline-field">Initiative <input id="f-initiative" name="initiative" type="number" min="-999" max="999" step="1" value="0"></label>
+                </fieldset>
+
+                <fieldset>
+                    <legend>Conditions</legend>
+                    <!-- Filled by app.js: one toggle chip per entry in CONDITIONS. -->
+                    <div class="conditions" id="conditions"></div>
+                    <!-- Filled by app.js while a condition that needs a specifier
+                         is active (Unaware: which senses; Impaired: which traits...).
+                         Hidden the rest of the time. -->
+                    <div class="condition-details" id="condition-details" hidden></div>
+                    <!-- Bruised stacks in M&M, so it is a counter, not a chip. -->
+                    <div class="conditions-foot">
+                        <label class="inline-field">Bruises <input id="f-bruises" name="bruises" type="number" min="0" max="999" step="1" inputmode="numeric" value="0"></label>
+                        <!-- End of the fight: unticks every chip, clears details and bruises. -->
+                        <button type="button" class="btn small" id="btn-clear-conditions">Clear conditions</button>
+                    </div>
+                </fieldset>
+
+                <fieldset>
+                    <legend>Powers</legend>
+                    <!-- Filled by app.js with one row per power (name + description + remove). -->
+                    <div id="powers" class="repeat-list"></div>
+                    <button type="button" class="btn small" id="btn-add-power">+ Add power</button>
+                </fieldset>
+
+                <!-- The rest are plain free-text areas. Their name="" matches
+                     the field name on the block object in app.js. -->
+                <fieldset>
+                    <legend>Skills</legend>
+                    <textarea name="skills" rows="3" placeholder="Acrobatics 8 (+12), Perception 6 (+8)…"></textarea>
+                </fieldset>
+
+                <fieldset>
+                    <legend>Advantages</legend>
+                    <textarea name="advantages" rows="2" placeholder="Agile Feint, Evasion 2, Improved Initiative…"></textarea>
+                </fieldset>
+
+                <fieldset>
+                    <legend>Offense</legend>
+                    <textarea name="offense" rows="3" placeholder="Unarmed +10 (Close, Damage 2)…"></textarea>
+                </fieldset>
+
+                <fieldset>
+                    <legend>Complications</legend>
+                    <textarea name="complications" rows="2" placeholder="Motivation: Justice. Secret identity…"></textarea>
+                </fieldset>
+
+                <fieldset>
+                    <legend>Notes</legend>
+                    <textarea name="notes" rows="3" placeholder="Anything else…"></textarea>
+                </fieldset>
+
+                <!-- Footer: save status on the left, actions on the right.
+                     aria-live tells screen readers to announce status changes.
+                     "Back to list" only matters on phones; style.css hides it
+                     on wide screens where the list is always visible. -->
+                <div class="editor-foot">
+                    <span id="save-status" class="hint" aria-live="polite"></span>
+                    <div class="spacer"></div>
+                    <button type="button" class="btn" id="btn-duplicate">Duplicate</button>
+                    <button type="button" class="btn danger" id="btn-delete">Delete</button>
+                    <button type="button" class="btn" id="btn-back">Back to list</button>
+                </div>
+            </form>
+        </section>
+    </main>
+
+    <!-- ================================================================
+         RULES REFERENCE POPUP. <dialog> is the browser's built-in modal:
+         showModal() opens it in front of everything with a dimmed backdrop,
+         Esc closes it, and focus stays inside while it is open. app.js
+         fills #ref-nav and #ref-body from the data in reference.js.
+         ================================================================ -->
+    <dialog id="ref-dialog" class="ref" aria-labelledby="ref-title">
+        <div class="ref-head">
+            <h2 id="ref-title">Checks &amp; conditions</h2>
+            <input id="ref-search" type="search" placeholder="Filter…" autocomplete="off" aria-label="Filter the reference">
+            <button type="button" class="btn small" id="ref-close">Close</button>
+        </div>
+        <!-- One tab per section. All lit = every section shown; tap one to show
+             only it, tap it again to show all. Filled by app.js. -->
+        <nav class="ref-nav" id="ref-nav" aria-label="Sections"></nav>
+        <div class="ref-body" id="ref-body"></div>
+    </dialog>
+
+    <!-- Small info card shown on hover / long press over a condition chip,
+         ability or defense box, or list badge. One element, moved and refilled
+         by app.js as needed. role="tooltip" tells screen readers what it is. -->
+    <div id="info-pop" class="info-pop" role="tooltip" hidden></div>
+
+    <!-- reference.js only defines the data (window.REFERENCE); app.js reads it,
+         so it must come first. Both are loaded last so every element above
+         exists by the time they run. -->
+    <script src="reference.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+<!--
+    App icon, drawn as vector art so it stays sharp at any size.
+    Used directly as the browser-tab icon and by the manifest.
+    icon-192.png and icon-512.png are flattened renders of this file for
+    platforms (mainly iOS) that will not accept an SVG icon.
+
+    The icon is just the shield: everything outside it is transparent.
+    viewBox="0 0 128 128" defines a 128x128 drawing area; all coordinates
+    below are in those units regardless of the size it is displayed at.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Shield body, filled with the sheet blue and edged in navy (the same
+       colours as the page background and borders in style.css).
+       M = move to, L = line to, V = vertical line, C = curve, Z = close. -->
+  <path d="M64 5 L117 25 V62 C117 95 93 117 64 125 C35 117 11 95 11 62 V25 Z"
+        fill="#1a8fd6" stroke="#142448" stroke-width="7" stroke-linejoin="round"/>
+
+  <!-- A lighter band across the top gives the shield a little depth. -->
+  <path d="M64 13 L109 30 V48 L19 48 V30 Z" fill="#4dbcef" opacity="0.55"/>
+
+  <!-- "PL" for Power Level. paint-order="stroke" draws the thick navy edge
+       underneath the orange fill, so the letters pop against the blue. -->
+  <text x="64" y="87" text-anchor="middle" font-family="Agency FB, Teko, Impact, sans-serif"
+        font-size="58" font-weight="700" fill="#f28b1e"
+        stroke="#142448" stroke-width="6" stroke-linejoin="round" paint-order="stroke">PL</text>
+</svg>

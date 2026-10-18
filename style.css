@@ -1,0 +1,666 @@
+/* =============================================================================
+ * Stat Block Tracker — styles.
+ *
+ * Visual language borrowed from the Mutants & Masterminds 3e character sheet:
+ *   - bright blue "circuit board" page background
+ *   - white panels with rounded corners and a navy border
+ *   - navy, condensed, UPPERCASE labels (Agency FB on the sheet)
+ *   - values written in bright cyan-blue
+ *   - section titles in light gray
+ *   - the orange of the logo as the single warm accent
+ *
+ * Organised top to bottom:
+ *   1. Tokens      the colours, fonts and sizes everything else refers to
+ *   2. Base        resets and defaults for raw elements (body, inputs...)
+ *   3. Buttons
+ *   4. Top bar
+ *   5. Layout      the sidebar/editor grid and the phone vs. desktop switch
+ *   6. Sidebar     the list of blocks
+ *   7. Editor      the form and its sections
+ *
+ * The approach is "mobile first": the default rules are for a phone, and
+ * @media (min-width: ...) blocks add changes for wider screens.
+ * ========================================================================== */
+
+
+/* ---------- 1. Tokens ------------------------------------------------------
+ * CSS variables (custom properties). Declared on :root so every element can
+ * read them with var(--name). Change a colour here and it changes everywhere.
+ * ------------------------------------------------------------------------- */
+:root {
+    /* Page background: the sheet's blue, lighter at the top, deeper at the bottom. */
+    --bg-top: #4dbcef;
+    --bg-mid: #1a8fd6;
+    --bg-bottom: #0b56a6;
+
+    --surface: #ffffff;       /* panels, inputs, the editor */
+    --surface-2: #eef4fb;     /* slightly tinted surface: stat boxes, hover states */
+    --text: #142448;          /* navy: labels and body text */
+    --muted: #9aa3b1;         /* light gray: section titles ("OFFENSE", "CONDITIONS") */
+    --border: #142448;        /* panels on the sheet have a navy border */
+    --border-soft: #c9d3e2;   /* lighter border for inputs inside panels */
+
+    --accent: #142448;        /* navy: header, selected items, "on" chips */
+    --accent-text: #ffffff;   /* text drawn on top of --accent */
+    --value: #1a8fd6;         /* cyan-blue: the colour the sheet writes numbers in */
+    --highlight: #f28b1e;     /* logo orange: the primary (+ New) button */
+    --highlight-text: #142448;
+    --danger: #d9361b;        /* logo red: the Delete button */
+
+    --radius: 10px;           /* the sheet's panels are quite rounded */
+    --gap: 12px;              /* standard spacing unit */
+
+    /* FONTS
+     * --font-display is the condensed sheet font: headings, labels, buttons,
+     *   numbers. Agency FB ships with Windows; Teko (loaded from Google Fonts
+     *   in index.html) stands in on phones and Macs. Arial Narrow is the last
+     *   resort when there is no network for Teko.
+     * --font-body is a normal sans for the long free-text areas, where a
+     *   condensed display font gets tiring to read. The sheet does the same. */
+    --font-display: "Agency FB", "Teko", "Saira Extra Condensed", "Arial Narrow", sans-serif;
+    --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Dark mode: when the OS is set to dark, override just the colour tokens.
+ * Every rule below that uses var(--something) picks up the new value
+ * automatically. The blue background stays, just deeper. */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg-top: #0f4f8f;
+        --bg-mid: #0a3666;
+        --bg-bottom: #061f3d;
+        --surface: #10203a;
+        --surface-2: #182b4a;
+        --text: #e6ecf5;
+        --muted: #8e9ab0;
+        --border: #3f5f93;
+        --border-soft: #2d4568;
+        --accent: #0f4f8f;
+        --accent-text: #ffffff;
+        --value: #5cc3ff;
+        --highlight: #f28b1e;
+        --highlight-text: #0f4f8f;
+        --danger: #ff6b55;
+    }
+}
+
+
+/* ---------- 2. Base ------------------------------------------------------- */
+
+/* Make width/height include padding and border. Without this, an input set
+ * to width:100% plus padding would overflow its container. */
+*, *::before, *::after { box-sizing: border-box; }
+
+/* The bottom colour goes on <html> so it shows if the page is shorter than
+ * the screen; the gradient on <body> covers the content itself. */
+html { background: var(--bg-bottom); }
+
+body {
+    margin: 0;                               /* browsers add 8px by default */
+    min-height: 100vh;
+    font: 16px/1.4 var(--font-body);         /* shorthand: size/line-height family */
+    color: var(--text);
+    /* Three layers, top one first:
+     *   1-2. faint vertical and horizontal lines every 28px = a hint of the
+     *        circuit-board texture without an image file
+     *   3.   the blue gradient */
+    background:
+        repeating-linear-gradient(90deg, rgba(255,255,255,0.07) 0 1px, transparent 1px 28px),
+        repeating-linear-gradient(0deg,  rgba(255,255,255,0.07) 0 1px, transparent 1px 28px),
+        linear-gradient(180deg, var(--bg-top) 0%, var(--bg-mid) 45%, var(--bg-bottom) 100%);
+    -webkit-text-size-adjust: 100%;          /* stop iOS enlarging text in landscape */
+}
+
+/* The sheet's labels are condensed and UPPERCASE. This class is applied to
+ * anything that should look like a sheet label; most rules below reuse it
+ * by listing the same properties. */
+h1, legend, label, button, .block-item .name, .block-item .meta, .badge, .chip, .stat span {
+    font-family: var(--font-display);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+h1 { font-size: 1.7rem; margin: 0; line-height: 1; }
+
+/* Form controls don't inherit font or colour by default; make them. */
+button, input, textarea, select { font: inherit; color: inherit; }
+
+/* Shared look for every text-like input. Values are written in the sheet's
+ * cyan-blue, in the display font, a touch larger because condensed fonts
+ * look small at the same pixel size. */
+input[type="text"], input[type="number"], input[type="search"] {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    background: var(--surface);
+    font-family: var(--font-display);
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--value);
+}
+
+/* Long text stays in the readable body font, navy, 16px (16px also stops
+ * iOS Safari zooming in when a field is focused). */
+textarea {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    background: var(--surface);
+    font: 16px/1.4 var(--font-body);
+    color: var(--text);
+    resize: vertical;        /* drag handle up/down only */
+    min-height: 2.5em;
+}
+
+/* Placeholders should look like hints, not like values. */
+::placeholder { color: var(--muted); font-weight: 400; opacity: 1; }
+
+/* Visible keyboard-focus ring. :focus-visible only shows it for keyboard
+ * users, not for mouse clicks on buttons. */
+input:focus, textarea:focus, button:focus-visible {
+    outline: 2px solid var(--value);
+    outline-offset: 1px;
+}
+
+
+/* ---------- 3. Buttons ---------------------------------------------------- */
+.btn {
+    padding: 6px 14px;
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    /* font-family is set here (not only in the group rule above) because the
+     * "button { font: inherit }" reset in section 2 would otherwise undo it. */
+    font-family: var(--font-display);
+    font-size: 1.2rem;
+    font-weight: 700;
+    line-height: 1;
+    min-height: 40px;        /* ~ the minimum comfortable touch target on phones */
+}
+/* Hover tint only where a real pointer can hover. On touch screens a tapped
+ * button would otherwise keep the hover colour ("sticky hover") until you
+ * tap somewhere else. */
+@media (hover: hover) { .btn:hover { background: var(--surface-2); } }
+
+/* Phone browsers paint their own translucent flash over anything tapped
+ * (Android Chrome in particular). Turn it off for our tappable things; each
+ * of them shows its own pressed or "on" state instead. */
+button, .chip, .stat, .block-item, .badge, .tab { -webkit-tap-highlight-color: transparent; }
+
+/* Variants: combine as class="btn primary", class="btn danger", etc. */
+.btn.primary { background: var(--highlight); color: var(--highlight-text); border-color: var(--highlight); }
+.btn.danger { color: var(--danger); border-color: var(--danger); }
+.btn.small { min-height: 34px; padding: 4px 10px; font-size: 1.05rem; }
+.btn.icon { min-width: 34px; padding: 4px 8px; }    /* square-ish, for the ✕ */
+
+
+/* ---------- 4. Top bar ---------------------------------------------------- */
+.topbar {
+    /* sticky = scrolls with the page until it hits top:0, then stays there. */
+    position: sticky;
+    top: 0;
+    z-index: 10;             /* draw above the content scrolling underneath */
+    display: flex;
+    align-items: center;
+    justify-content: space-between;   /* title left, buttons right */
+    gap: var(--gap);
+    padding: 10px 16px;
+    /* env(safe-area-inset-top) is the height of the iPhone notch/status bar
+     * (0 everywhere else). Add it so the title isn't hidden behind it. */
+    padding-top: calc(10px + env(safe-area-inset-top));
+    background: var(--accent);
+    color: var(--accent-text);
+    border-bottom: 3px solid var(--highlight);   /* a stripe of logo orange */
+}
+
+/* The title gets the logo treatment: orange with a dark red edge. */
+.topbar h1 {
+    color: var(--highlight);
+    text-shadow: 1px 1px 0 #8a1d0c, 2px 2px 0 rgba(0,0,0,0.35);
+    font-style: italic;
+}
+
+/* Buttons inside the dark header get a transparent, outlined look. */
+.topbar .btn { background: transparent; color: inherit; border-color: rgba(255,255,255,0.5); }
+.topbar .btn:hover { background: rgba(255,255,255,0.1); }
+.topbar .btn.primary { background: var(--highlight); color: var(--highlight-text); border-color: var(--highlight); }
+.topbar-actions { display: flex; gap: 8px; flex-wrap: wrap; }   /* wrap on narrow phones */
+
+/* Phones: app.js adds .bar-hidden while scrolling down. The bar is sticky,
+ * so sliding it up by its own height reveals the content underneath; the
+ * transition makes it glide rather than jump. */
+.topbar { transition: transform 0.25s ease; }
+@media (max-width: 819px) {
+    .topbar.bar-hidden { transform: translateY(-100%); }
+}
+
+
+/* ---------- 5. Layout ----------------------------------------------------- */
+.layout {
+    display: grid;
+    grid-template-columns: 1fr;      /* phone: a single column */
+    gap: var(--gap);
+    padding: var(--gap) 16px;
+    padding-bottom: calc(var(--gap) + env(safe-area-inset-bottom));  /* iPhone home bar */
+    max-width: 1200px;
+    margin: 0 auto;                  /* centre on very wide screens */
+}
+
+/* PHONE BEHAVIOUR: while a block is open (app.js adds .editing to <main>),
+ * hide the list so the editor has the whole screen. "Back to list" removes
+ * the class again. */
+.layout.editing .sidebar { display: none; }
+
+/* DESKTOP / TABLET: from 820px wide, show both columns side by side. */
+@media (min-width: 820px) {
+    .layout { grid-template-columns: 300px 1fr; }   /* fixed sidebar, editor takes the rest */
+    .layout.editing .sidebar { display: block; }    /* undo the phone rule above */
+
+    /* Keep the list pinned while the long editor scrolls. top: clears the
+     * sticky header; max-height + overflow lets a long list scroll itself. */
+    .sidebar { position: sticky; top: 76px; align-self: start; max-height: calc(100vh - 96px); overflow: auto; }
+
+    /* The list is always visible here, so "Back to list" is pointless. */
+    #btn-back { display: none; }
+}
+
+
+/* ---------- 6. Sidebar ---------------------------------------------------- */
+.search { margin-bottom: 8px; border: 2px solid var(--border); }
+
+.block-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+
+/* One entry in the list: a small white sheet panel. Generated by renderList().
+ * Two stacked rows: the name/PL line on top, then the condition badges, which
+ * wrap onto as many lines as they need. (They used to sit to the right of
+ * the name, but in a 300px sidebar that pushed them out of the box.)
+ * min-width: 0 lets the entry shrink below its content's natural width,
+ * which is what allows the name to be cut off with "…" instead of overflowing. */
+.block-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    padding: 8px 12px;
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    cursor: pointer;
+}
+.block-item:hover { background: var(--surface-2); }
+
+/* The currently open block: orange border plus a thick bar on the left,
+ * drawn with an inset box-shadow so it doesn't change the element's size. */
+.block-item.active { border-color: var(--highlight); box-shadow: inset 4px 0 0 var(--highlight); }
+
+/* The first row: name on the left, "PL 10" on the right. */
+.block-item > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+
+/* Long names get cut off with "…" instead of wrapping. overflow + text-overflow
+ * + white-space are all needed, plus min-width: 0 so the flex item may shrink. */
+.block-item .name { font-size: 1.35rem; font-weight: 700; line-height: 1.1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.block-item .meta { color: var(--value); font-size: 1rem; font-weight: 700; white-space: nowrap; flex-shrink: 0; }
+
+/* Second row: the badges, wrapping as needed. Hidden entirely when empty so
+ * it doesn't leave a blank gap under the name. */
+.block-item .badges { display: flex; gap: 4px; flex-wrap: wrap; }
+.block-item .badges:empty { display: none; }
+
+/* An entry with no badges is only one line tall, so give it more room above
+ * and below the name (app.js adds this class). Entries with badges keep the
+ * tighter padding because the badge row already fills the space. */
+.block-item.no-badges { padding-top: 16px; padding-bottom: 16px; }
+
+/* Small pill showing a condition or the bruise count. */
+.badge {
+    font-size: 0.85rem;
+    padding: 1px 7px;
+    border-radius: 999px;      /* any large value = fully rounded ends */
+    background: var(--surface-2);
+    border: 1px solid var(--border-soft);
+    color: var(--text);
+    white-space: nowrap;       /* never break a condition name across lines */
+    max-width: 100%;           /* a long detail like "Impaired (Strength, Agility)" */
+    overflow: hidden;          /* gets cut off with "…" instead of overflowing */
+    text-overflow: ellipsis;
+}
+
+/* Hints sit on the blue page background, so they are white there... */
+.hint { color: rgba(255,255,255,0.9); font-size: 0.95rem; }
+/* ...but inside a white panel they go back to gray. */
+.editor .hint { color: var(--muted); }
+
+
+/* ---------- 7. Editor ----------------------------------------------------- */
+.editor {
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    padding: var(--gap);
+}
+
+/* Name + PL row. flex: 1 on the name makes it take all the leftover width. */
+.editor-head { display: flex; flex-wrap: wrap; gap: var(--gap); align-items: center; margin-bottom: var(--gap); }
+.name-input { font-size: 1.8rem; flex: 1; }
+.pl-label { display: flex; align-items: center; gap: 6px; font-size: 1.2rem; font-weight: 700; white-space: nowrap; }
+.pl-label input { width: 64px; text-align: center; }
+
+/* Each section of the form: a rounded navy-bordered panel like on the sheet.
+ * min-width: 0 stops a wide grid inside from forcing the fieldset wider than
+ * its parent on small screens. */
+fieldset {
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px 12px 12px;
+    margin: 0 0 var(--gap);
+    min-width: 0;
+}
+
+/* The section title in the fieldset's top border: the sheet's light gray. */
+legend { font-size: 1.25rem; font-weight: 700; padding: 0 6px; color: var(--muted); line-height: 1; }
+
+/* Stat grids. "1fr" = one equal share of the available width.
+ *   Abilities: 4 per row on phones, all 8 in one row from 600px.
+ *   Defenses:  5 per row, dropping to 3 per row on very narrow phones. */
+.grid { display: grid; gap: 8px; }
+.grid-8 { grid-template-columns: repeat(4, 1fr); }
+.grid-5 { grid-template-columns: repeat(5, 1fr); }
+@media (min-width: 600px) { .grid-8 { grid-template-columns: repeat(8, 1fr); } }
+@media (max-width: 420px) { .grid-5 { grid-template-columns: repeat(3, 1fr); } }
+
+/* One ability/defense box: navy label on top, big cyan number in a
+ * navy-bordered square underneath, like the ability column on the sheet.
+ * Generated by buildStatGrid() in app.js. */
+.stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+.stat span { font-size: 1rem; font-weight: 700; color: var(--text); line-height: 1.1; }
+.stat input {
+    text-align: center;
+    padding: 4px;
+    font-size: 1.6rem;
+    border: 2px solid var(--border);
+    border-radius: 8px;
+}
+
+/* Bruises counter on the left, "Clear conditions" pushed to the right. */
+.conditions-foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+
+/* "Initiative 0" and "Bruises 0": label and a short input on one line. */
+.inline-field { display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 1.2rem; font-weight: 700; }
+.inline-field input { width: 80px; text-align: center; border: 2px solid var(--border); }
+
+/* The +/- button beside a signed number field. Hidden until that field has
+ * the cursor (:focus-within on its box), and never shown where a mouse exists
+ * since a keyboard has a minus key. In a stat box it sits in the top-right
+ * corner; next to Initiative it follows the number. */
+.sign { display: none; width: 28px; height: 28px; min-height: 0; padding: 0; border-radius: 50%; font-size: 1.15rem; line-height: 1; align-items: center; justify-content: center; touch-action: manipulation; }
+.stat { position: relative; }
+.sign { background: var(--surface); color: var(--value); border: 2px solid var(--value); transition: background 0.12s, color 0.12s; }   /* outlined, like the rest of the sheet */
+/* Pressed: a light blue tint inside for as long as the finger is down; the
+ * border and the sign keep their colour. (.pressed is set by app.js, because
+ * the button blocks the browser's own :active handling to keep the cursor in
+ * the field.) */
+.sign:active, .sign.pressed { background: color-mix(in srgb, var(--value) 18%, var(--surface)); }
+.stat .sign { position: absolute; top: -8px; right: -8px; }
+.inline-field .sign { margin-left: 2px; }
+@media (hover: none) {
+    .stat:focus-within .sign, .inline-field:focus-within .sign { display: inline-flex; }
+}
+
+/* Condition chips. Each is a <label> that wraps a hidden checkbox; clicking
+ * anywhere on the label toggles the box. app.js adds .on when it's checked. */
+.conditions { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+    padding: 5px 12px;
+    border-radius: 999px;
+    border: 2px solid var(--border);
+    background: var(--surface);
+    cursor: pointer;
+    user-select: none;       /* don't highlight the text when tapping quickly */
+    font-size: 1.1rem;
+    font-weight: 700;
+    line-height: 1.2;
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+}
+.chip input { display: none; }   /* the real checkbox is invisible */
+.chip.on { background: var(--value); color: #ffffff; border-color: var(--value); }
+
+/* A chip whose condition is covered by another active one (app.js adds the
+ * class and disables the checkbox, so tapping it does nothing). */
+.chip.superseded { opacity: 0.45; cursor: not-allowed; border-style: dashed; }
+
+/* The small "← Stunned" note inside a superseded chip. Empty (and hidden) otherwise. */
+.chip-by { font-size: 0.85rem; font-weight: 400; margin-left: 6px; }
+.chip-by:empty { display: none; }
+
+/* Detail rows under the chips, e.g. "UNAWARE OF: [Visual] [Auditory] ..." or
+ * "IMPAIRED: [which traits]". Generated by renderConditionDetails() in app.js. */
+.condition-details { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-soft); }
+/* "display: flex" above would override the hidden attribute's built-in
+ * "display: none", so restate it: an element with hidden must stay hidden. */
+.condition-details[hidden] { display: none; }
+.detail-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.detail-label { font-family: var(--font-display); text-transform: uppercase; font-weight: 700; font-size: 1.1rem; min-width: 110px; }
+.detail-row .detail-text { flex: 1; min-width: 180px; font-size: 1.05rem; }
+.detail-row .hint { font-size: 0.85rem; }
+
+/* Smaller chips for the sense toggles. */
+.chip.mini { padding: 2px 10px; min-height: 30px; font-size: 1rem; border-width: 1px; }
+
+/* Power rows. Generated by renderPowers() in app.js. Layout is a 2-column
+ * grid: inputs stacked on the left, the ✕ button spanning both rows on the right.
+ *
+ *   | power-name  | ✕ |
+ *   | power-desc  |   |
+ */
+.repeat-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.power-row {
+    display: grid;
+    grid-template-columns: 1fr auto;   /* "auto" = just as wide as the button */
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid var(--border-soft);
+    border-radius: 8px;
+    background: var(--surface-2);
+}
+.power-row .power-name { grid-column: 1; }
+.power-row .power-remove { grid-column: 2; grid-row: 1 / span 2; align-self: start; }
+.power-row .power-desc { grid-column: 1; }
+
+/* Footer of the editor: status text, a flexible spacer, then the buttons.
+ * The spacer's flex: 1 pushes everything after it to the right. */
+.editor-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.spacer { flex: 1; }
+
+
+/* ---------- 8. Rules reference popup -------------------------------------
+ * A <dialog> opened with showModal(). The browser centres it and draws the
+ * ::backdrop behind it; we only style the box and its contents.
+ * ------------------------------------------------------------------------- */
+dialog.ref {
+    width: min(760px, calc(100vw - 32px));
+    max-height: min(90vh, 100vh - 32px);
+    padding: 0;
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    display: flex;              /* header / nav / scrolling body stacked */
+    flex-direction: column;
+    overflow: hidden;           /* the body scrolls, not the whole dialog */
+}
+dialog.ref:not([open]) { display: none; }   /* "display: flex" would otherwise show it */
+dialog.ref::backdrop { background: rgba(8, 20, 48, 0.65); }
+
+.ref-head {
+    flex-shrink: 0;             /* header and nav keep their height... */
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--accent);
+    color: var(--accent-text);
+    border-bottom: 3px solid var(--highlight);
+}
+.ref-head h2 { margin: 0; font-family: var(--font-display); text-transform: uppercase; font-size: 1.6rem; line-height: 1; white-space: nowrap; }
+.ref-head input { flex: 1; min-width: 100px; font-size: 1.05rem; }
+.ref-head .btn { background: transparent; color: inherit; border-color: rgba(255,255,255,0.5); flex-shrink: 0; }
+
+/* Phones: title and Close on the first line, the filter box on its own line
+ * underneath. flex-wrap lets the row break; "order" moves the input last and
+ * flex-basis 100% makes it take the whole second line. */
+@media (max-width: 600px) {
+    .ref-head { flex-wrap: wrap; }
+    .ref-head h2 { flex: 1; }
+    .ref-head input { order: 3; flex: 1 1 100%; }
+}
+
+/* Section tabs: small chips that wrap onto as many lines as they need, so
+ * they always fit the popup's width. All lit by default; tapping one shows
+ * only that section, tapping it again shows all (see renderReference). */
+.ref-nav { flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border-soft); }
+.ref-nav .tab { white-space: nowrap; font-size: 0.95rem; min-height: 30px; padding: 3px 9px; border-color: var(--border-soft); color: var(--muted); }
+.ref-nav .tab.on { border-color: var(--accent); color: var(--text); background: var(--surface-2); }
+.ref-nav .tab[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }   /* the single chosen tab */
+
+.ref-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 12px; }   /* ...and the body takes the rest and scrolls */
+/* Intro paragraph at the top of the full (all tabs) view. */
+.ref-intro { margin: 12px 0 4px; padding: 10px 12px; border-left: 4px solid var(--highlight); background: var(--surface-2); border-radius: 0 8px 8px 0; font-size: 0.95rem; }
+.ref-intro p { margin: 0 0 6px; }
+.ref-intro p:last-child { margin-bottom: 0; }
+
+.ref-section h3 {
+    font-family: var(--font-display);
+    text-transform: uppercase;
+    color: var(--muted);
+    font-size: 1.3rem;
+    margin: 14px 0 6px;
+    letter-spacing: 0.04em;
+}
+.ref-entry {
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    border: 1px solid var(--border-soft);
+    border-radius: 8px;
+    background: var(--surface-2);
+}
+/* Highlighted when its condition is active on the open block. */
+.ref-entry.active { border-color: var(--value); box-shadow: inset 3px 0 0 var(--value); }
+.ref-entry h4 {
+    margin: 0 0 4px;
+    font-family: var(--font-display);
+    text-transform: uppercase;
+    font-size: 1.2rem;
+    line-height: 1.1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.ref-entry p { margin: 0 0 4px; font-size: 0.95rem; }
+.ref-entry p:last-child { margin-bottom: 0; }
+.ref-entry table { border-collapse: collapse; width: 100%; font-size: 0.95rem; margin-top: 4px; }
+.ref-entry td { padding: 2px 8px 2px 0; vertical-align: top; }
+.ref-entry td:first-child { width: 1%; font-family: var(--font-display); text-transform: uppercase; font-weight: 700; white-space: nowrap; }   /* 1% = as narrow as its content */
+
+/* Multi-column tables with a header row (entry.table in reference.js).
+ * The wrapper scrolls sideways so a wide table never widens the popup. */
+.table-wrap { overflow-x: auto; margin-top: 6px; -webkit-overflow-scrolling: touch; }
+.ref-entry table.wide { min-width: 480px; }
+.ref-entry table.wide th {
+    text-align: left;
+    padding: 4px 8px 4px 0;
+    font-family: var(--font-display);
+    text-transform: uppercase;
+    font-size: 0.85rem;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border-soft);
+    white-space: nowrap;
+}
+.ref-entry table.wide td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border-soft); }
+.ref-entry table.wide tr:last-child td { border-bottom: 0; }
+.ref-entry table.wide td:first-child { white-space: normal; min-width: 90px; }   /* use names may wrap */
+.ref-entry table.wide td:nth-child(2) { color: var(--value); font-weight: 600; }   /* the DC / opposed-by column in sheet blue */
+.ref-empty { color: var(--muted); padding: 16px 0; }
+
+/* Brief highlight on the entry an info card jumped to. */
+.ref-entry.flash { animation: ref-flash 1.2s ease-out; }
+@keyframes ref-flash { from { background: var(--highlight); } to { background: var(--surface-2); } }
+
+
+/* ---------- 9. Info cards --------------------------------------------------
+ * The hover / long-press card (#info-pop). position: fixed so app.js can
+ * place it with window coordinates; z-index above the sticky header. */
+.info-pop {
+    position: fixed;
+    z-index: 50;
+    width: min(320px, calc(100vw - 16px));
+    padding: 0 12px 10px;      /* no top padding: the title row carries it (see .info-head) */
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+    font-size: 0.92rem;
+    line-height: 1.35;
+}
+.info-pop[hidden] { display: none; }
+/* The card lets the mouse pass through to whatever is under it, so it never
+ * blocks hovering a neighbouring chip or box. Only its link catches clicks. */
+.info-pop { pointer-events: none; }
+.info-pop .info-more { pointer-events: auto; }
+.info-pop { display: flex; flex-direction: column; }
+.info-pop.above { flex-direction: column-reverse; padding: 10px 12px 0; }   /* flipped above the element: title row at the bottom */
+/* The title row is the one part of the card that is solid to the mouse. It
+ * owns the card's edge padding, so from the chip's edge to the "More" link
+ * the pointer is over the row the whole way and the card stays open. */
+.info-head { display: flex; justify-content: flex-start; align-items: baseline; gap: 10px; padding: 8px 0 4px; pointer-events: auto; }
+.info-pop.above .info-head { padding: 4px 0 8px; }
+.info-title { font-family: var(--font-display); text-transform: uppercase; font-size: 1.2rem; line-height: 1.1; }
+.info-pop p { margin: 0; }
+.info-pop p + table { margin-top: 6px; }
+.info-pop table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+.info-pop td { padding: 1px 6px 1px 0; vertical-align: top; }
+.info-pop td:first-child { width: 1%; font-family: var(--font-display); text-transform: uppercase; font-weight: 700; white-space: nowrap; }
+.info-more {
+    border: 0;
+    padding: 0;
+    background: none;
+    color: var(--value);
+    font-family: var(--font-display);
+    text-transform: uppercase;
+    font-size: 1rem;
+    cursor: pointer;
+}
+.info-more:hover { text-decoration: underline; }
+
+/* Long-pressing a chip or stat box must not select text or open a menu. */
+#conditions .chip, .stat, .block-item .badge { -webkit-touch-callout: none; user-select: none; }
+
+/* Small tags next to an entry's heading. */
+.tag { font-size: 0.75rem; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border-soft); font-weight: 400; letter-spacing: 0; }
+.tag.active { background: var(--value); color: #fff; border-color: var(--value); }
+.tag.verify { color: var(--danger); border-color: var(--danger); }
+
+/* Phones: let the popup use the whole screen. */
+@media (max-width: 600px) {
+    /* The browser's own dialog style caps max-width and max-height, so both
+     * must be overridden, not just width and height. */
+    dialog.ref { width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh; border: 0; border-radius: 0; margin: 0; }
+    .ref-head { padding-top: calc(10px + env(safe-area-inset-top)); }
+}
