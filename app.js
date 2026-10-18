@@ -801,7 +801,12 @@
             },
                 el('div', {},
                     el('div', { class: 'name', text: b.name || '(unnamed)' }),
-                    el('div', { class: 'meta', text: `PL ${b.pl} \u00b7 ${computePP(b).spent}/${computePP(b).total} pp` }),
+                    // Just the PL; the only power point fact worth seeing from
+                    // the list is an overspend, shown as a small red badge.
+                    el('div', { class: 'meta' },
+                        document.createTextNode(`PL ${b.pl}`),
+                        ...(computePP(b).left < 0 ? [el('span', { class: 'badge over', text: '!', title: `${-computePP(b).left} power points over` })] : []),
+                    ),
                 ),
                 badges,
             );
@@ -1188,11 +1193,46 @@
     /** Turn "Making checks" into "making-checks" for use as an element id. */
     const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
+    /**
+     * Three extra sections for the popup, built from the same samples.js the
+     * "+ From the book" pickers use (so the two never disagree): every
+     * advantage, every power effect and sample power, and every complication.
+     * Skills are not repeated here: the Skill checks section already covers
+     * all sixteen in more detail.
+     */
+    const sampleSections = () => {
+        const S = window.SAMPLES || {};
+        return [
+            {
+                title: 'Advantages',
+                entries: (S.advantages || []).map((a) => ({
+                    name: a.name,
+                    text: [`${a.type} advantage${a.ranked ? ', ranked' + (a.max ? ` (max ${a.max})` : '') : ''}. ${a.effect}`, a.text].filter(Boolean),
+                })),
+            },
+            {
+                title: 'Powers',
+                entries: (S.powers || []).map((p) => ({
+                    name: p.name,
+                    text: [`${p.kind === 'sample' ? 'Sample power' : (p.type || 'Effect') + ' effect'}.`, p.text].filter(Boolean),
+                    rows: [
+                        ['Effect', p.effect], ['Type', p.type], ['Action', p.action], ['Range', p.range],
+                        ['Duration', p.duration], ['Resisted by', p.resist], ['Cost', p.cost],
+                    ].filter(([, v]) => v),
+                })),
+            },
+            {
+                title: 'Complications',
+                entries: (S.complications || []).map((c) => ({ name: c.name, text: c.text })),
+            },
+        ];
+    };
+
     const renderReference = () => {
         const q = refSearch.value.trim().toLowerCase();
         const block = selected();
         const active = new Set(block ? block.conditions : []);
-        const data = window.REFERENCE || [];
+        const data = [...(window.REFERENCE || []), ...sampleSections()];
 
         const sections = data.filter((sec) => !refSection || sec.title === refSection).map((sec) => {
             // Filter entries by the search box (matches name, text and table cells).
@@ -1305,31 +1345,92 @@
      * { section, entry, title } or null. Looks through window.REFERENCE each
      * time, which is cheap and means edits to reference.js just work.
      */
+    // Short texts for the figures of the Power points section; the "More"
+    // link of each goes to the Power point costs entry.
+    const PP_INFO = {
+        'PL': 'Power level: the series\u2019 overall cap on traits and what sets the base power points, 15 per level. Raised by the GM as the heroes earn more points. (p. 24)',
+        'Base': 'Power level \u00d7 15: the points a hero starts with. Changes with the PL field above. (p. 24)',
+        'Earned': 'Points the GM has awarded on top of the base, usually 1 per adventure or session. Type them in here as they come. (p. 262)',
+        'Total': 'Base plus earned: everything this character has to spend.',
+        'Spent': 'Everything on the sheet added up: abilities, defenses, skills, advantages, powers and the Other field.',
+        'Left': 'Total minus spent. Red means more has been spent than the character has.',
+        'Points': 'Equipment points: 5 per rank of the Equipment advantage, spent on gear instead of power points. (p. 130)',
+        'Other': 'Anything the lists above do not cover, such as points moved here from an older save. Typed in by hand.',
+    };
+
     const infoLookup = (kind, key) => {
-        for (const section of window.REFERENCE || []) {
-            for (const entry of section.entries) {
-                if (kind === 'condition' && entry.condition === key) return { section, entry, title: entry.name };
-                if (kind === 'ability' && entry.name.includes(`(${key})`)) return { section, entry, title: entry.name };
-                if (kind === 'defense' && entry.name === 'Defenses') {
-                    const row = (entry.rows || []).find(([name]) => name === key);
-                    if (row) return { section, entry, title: key, text: row[1] };
-                }
-                if (kind === 'bruised' && entry.name === 'Damage results') return { section, entry, title: 'Bruised', text: entry.text };
+        const all = [...(window.REFERENCE || []), ...sampleSections()];
+        const find = (sectionTitle, test) => {
+            for (const section of all) {
+                if (sectionTitle && section.title !== sectionTitle) continue;
+                const entry = section.entries.find(test);
+                if (entry) return { section, entry, title: entry.name };
             }
+            return null;
+        };
+        const lc = (s) => String(s || '').trim().toLowerCase();
+        switch (kind) {
+            case 'condition': return find(null, (e) => e.condition === key);
+            case 'ability': return find('Ability checks', (e) => e.name.includes(`(${key})`));
+            case 'defense': {
+                const f = find('Ability checks', (e) => e.name === 'Defenses');
+                const row = f && (f.entry.rows || []).find(([name]) => name === key);
+                return row ? { ...f, title: key, text: row[1] } : null;
+            }
+            case 'bruised': { const f = find('Combat checks', (e) => e.name === 'Damage results'); return f && { ...f, title: 'Bruised', text: f.entry.text }; }
+            case 'initiative': return find('Combat checks', (e) => e.name === 'Initiative');
+            case 'pp': {   // a figure or category of the Power points section
+                const f = find('Ability checks', (e) => e.name === 'Power point costs');
+                if (!f) return null;
+                const row = (f.entry.rows || []).find(([name]) => name === key);
+                const text = PP_INFO[key] || (row && row[1]);
+                return text ? { ...f, title: key, text } : null;
+            }
+            case 'over': { const f = find('Ability checks', (e) => e.name === 'Power point costs'); return f && { ...f, title: 'Overspent', text: key }; }
+            // Rows of the lists: the book entry for whatever is named in the row.
+            // A skill like "Expertise: Science" matches the "Expertise" entry.
+            case 'skill': return lc(key) ? find('Skill checks', (e) => lc(key) === lc(e.name) || lc(key).startsWith(lc(e.name) + ':') || lc(key).startsWith(lc(e.name) + ' ')) : null;
+            case 'advantage': return lc(key) ? find('Advantages', (e) => lc(key) === lc(e.name) || lc(key).startsWith(lc(e.name) + ' ') || lc(key).startsWith(lc(e.name) + ':')) : null;
+            case 'power': return lc(key) ? find('Powers', (e) => lc(key) === lc(e.name)) || find('Powers', (e) => lc(key).startsWith(lc(e.name) + ' ')) : null;
+            case 'complication': return lc(key) ? find('Complications', (e) => lc(key) === lc(e.name) || lc(key).startsWith(lc(e.name) + ':') || lc(e.name).startsWith(lc(key) + ':') && false) || find('Complications', (e) => lc(e.name) === 'motivation: ' + lc(key).replace(/^motivation:\s*/, '')) : null;
         }
         return null;
     };
 
     /** Works out what an element on screen refers to: which kind and which key. */
     const infoSubject = (target) => {
+        const c = target.classList;
         const cond = target.querySelector?.('[data-condition]');
         if (cond) return ['condition', cond.dataset.condition];
         const stat = target.querySelector?.('[data-key]');
         if (stat) return [stat.dataset.group === 'abilities' ? 'ability' : 'defense', stat.dataset.key];
-        if (target.classList.contains('badge')) {
+        if (c.contains('badge')) {
+            if (c.contains('over')) return ['over', target.title];
             const name = target.textContent.replace(/\s*\(.*$/, '').trim();   // "Unaware (Visual)" -> "Unaware"
             return name.startsWith('Bruised') ? ['bruised', 'Bruised'] : ['condition', name];
         }
+        // Loose fields and the Power points section: keyed by their label text.
+        // The label is the text before any <small> subtitle or <output> figure:
+        // for a .pp-stat that is its first text node, for a .pp-row the first
+        // text node inside its <span>.
+        const label = () => {
+            const first = target.firstChild;
+            const node = first && first.nodeType === Node.TEXT_NODE ? first : target.querySelector('span')?.firstChild;
+            return (node?.textContent || '').trim();
+        };
+        if (c.contains('pl-label')) return ['pp', 'PL'];
+        if (c.contains('inline-field')) {
+            if (target.querySelector('#f-initiative')) return ['initiative', 'Initiative'];
+            if (target.querySelector('#f-bruises')) return ['bruised', 'Bruised'];
+            if (target.querySelector('#f-pp-earned')) return ['pp', 'Earned'];
+        }
+        if (c.contains('pp-stat') || c.contains('pp-row')) return ['pp', label()];
+        // List rows: the name typed in the row's first text field.
+        const name = target.querySelector?.('input[type="text"]')?.value || '';
+        if (target.closest('#skills')) return ['skill', name];
+        if (target.closest('#advantages')) return ['advantage', name];
+        if (target.closest('#complications')) return ['complication', name];
+        if (c.contains('power-row')) return ['power', name];
         return null;
     };
 
@@ -1356,7 +1457,7 @@
         infoPop.replaceChildren(
             el('div', { class: 'info-head' },
                 el('button', {
-                    type: 'button', class: 'info-more', text: `More \u203a`, title: 'Open in Checks',
+                    type: 'button', class: 'info-more', text: `More \u203a`, title: 'Open in the reference',
                     onclick: () => { hideInfo(); openReference(section.title, entry.name); },
                 }),
                 el('div', { class: 'info-title', text: found.title }),
@@ -1367,6 +1468,8 @@
         );
         infoPop.hidden = false;
         infoTarget = target;
+        infoShownAt = performance.now();   // see the scroll / resize listeners below
+        infoShownScroll = window.scrollY;
 
         // Position: just below the element, flipped above if there is no room
         // (the "above" class then puts the title row at the bottom, still next
@@ -1386,7 +1489,10 @@
     };
 
     /** The elements that get a card: condition chips, stat boxes, list badges. */
-    const infoTargetOf = (node) => node.closest?.('#conditions .chip, .stat, .block-item .badge');
+    const infoTargetOf = (node) => node.closest?.('#conditions .chip, .stat, .block-item .badge, .pl-label, .inline-field, .pp-stat, .pp-row, #skills .list-row, #advantages .list-row, #complications .list-row, #powers .power-row');
+    /** A list row shows no card while you are typing in it, and a long press on its fields keeps the normal text menu. */
+    const infoIsRow = (target) => target.classList.contains('list-row') || target.classList.contains('power-row');
+    const infoFormControl = (node) => node.closest?.('input, select, textarea, button');
 
     // --- Mouse. The card ignores the mouse (pointer-events: none in the CSS,
     //     except its "More" link), so e.target is always whatever is under the
@@ -1405,6 +1511,7 @@
         if (target) {
             clearTimeout(infoHideTimer);
             if (target === infoTarget || target === infoPendingFor) return;
+            if (infoIsRow(target) && target.contains(document.activeElement)) return;
             clearTimeout(infoShowTimer);
             infoPendingFor = target;
             const delay = infoPop.hidden ? INFO_HOVER_DELAY : INFO_SWITCH_DELAY;
@@ -1421,24 +1528,33 @@
         hideInfo();
     });
 
-    // --- Touch: hold for half a second. Lifting or moving the finger first
-    //     cancels; a completed long press also swallows the click that
-    //     follows, so the chip is not toggled by accident.
+    // --- Touch: hold for half a second. Lifting the finger first cancels, as
+    //     does sliding it more than a few pixels (a real finger always
+    //     wobbles a little, so small movement must NOT cancel). A completed
+    //     long press also swallows the click that follows, so the chip is
+    //     not toggled by accident.
+    const INFO_PRESS_SLOP = 12;   // px the finger may drift before it counts as a move
+    let infoPressStart = null;    // where the finger landed
     document.addEventListener('pointerdown', (e) => {
         if (e.pointerType === 'mouse') return;
         const target = infoTargetOf(e.target);
         if (!target) { if (!infoPop.contains(e.target)) hideInfo(); return; }
+        if (infoIsRow(target) && infoFormControl(e.target)) return;   // leave the field's own long-press behaviour alone
         infoLongPressed = false;
+        infoPressStart = { x: e.clientX, y: e.clientY };
         clearTimeout(infoPressTimer);
         infoPressTimer = setTimeout(() => { infoLongPressed = true; showInfo(target); }, INFO_PRESS_DELAY);
     });
-    for (const type of ['pointerup', 'pointercancel', 'pointermove']) {
-        document.addEventListener(type, (e) => {
-            if (e.pointerType === 'mouse') return;
-            if (type === 'pointermove' && !infoTargetOf(e.target)) return;
-            clearTimeout(infoPressTimer);
-        });
+    for (const type of ['pointerup', 'pointercancel']) {
+        document.addEventListener(type, (e) => { if (e.pointerType !== 'mouse') clearTimeout(infoPressTimer); });
     }
+    document.addEventListener('pointermove', (e) => {
+        if (e.pointerType === 'mouse' || !infoPressStart) return;
+        if (Math.hypot(e.clientX - infoPressStart.x, e.clientY - infoPressStart.y) > INFO_PRESS_SLOP) {
+            clearTimeout(infoPressTimer);
+            infoPressStart = null;
+        }
+    });
     document.addEventListener('click', (e) => {
         if (infoLongPressed && infoTargetOf(e.target)) {
             e.preventDefault();          // don't toggle the chip
@@ -1447,11 +1563,32 @@
         }
     }, true);
     // Stop the browser's own long-press menu / text selection on those elements.
-    document.addEventListener('contextmenu', (e) => { if (infoTargetOf(e.target)) e.preventDefault(); });
+    document.addEventListener('contextmenu', (e) => {
+        const target = infoTargetOf(e.target);
+        if (target && !(infoIsRow(target) && infoFormControl(e.target))) e.preventDefault();
+    });
 
     // --- Any of these means the card is no longer where it should be.
-    window.addEventListener('scroll', hideInfo, true);
-    window.addEventListener('resize', hideInfo);
+    //     Scrolling and resizing would leave the card in the wrong place, so
+    //     they hide it. Two allowances for phones: touching the screen can
+    //     nudge the page by a pixel or two and collapse the browser's address
+    //     bar (which fires scroll AND resize), so for a moment after the card
+    //     appears those are ignored, and afterwards only a scroll of more than
+    //     a couple of dozen pixels counts.
+    let infoShownAt = 0;
+    let infoShownScroll = 0;
+    const INFO_SETTLE_MS = 800;
+    const INFO_SCROLL_SLOP = 24;
+    window.addEventListener('scroll', () => {
+        if (infoPop.hidden) return;
+        if (performance.now() - infoShownAt < INFO_SETTLE_MS) return;
+        if (Math.abs(window.scrollY - infoShownScroll) < INFO_SCROLL_SLOP) return;
+        hideInfo();
+    }, true);
+    window.addEventListener('resize', () => {
+        if (infoPop.hidden || performance.now() - infoShownAt < INFO_SETTLE_MS) return;
+        hideInfo();
+    });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { clearTimeout(infoShowTimer); hideInfo(); } });
 
     /* =========================================================================

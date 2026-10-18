@@ -31,7 +31,7 @@
 /* Shown at the top of the popup only while every tab is lit and nothing is
  * typed in the filter. One paragraph, or an array of paragraphs. */
 window.REFERENCE_INTRO = [
-    'A quick rules reference for the table. Everything here is summarised from the Mutants & Masterminds Deluxe Hero\u2019s Handbook, and the page number in brackets at the end of an entry points to where it is in that book. Tap a tab above to see just that section; tap it again to come back to this full view. The filter box searches every entry. Entries for conditions that are active on the open stat block are highlighted.',
+    'A quick rules reference for the table. Everything here is summarised from the Mutants & Masterminds Deluxe Hero\u2019s Handbook, and the page number in brackets at the end of an entry points to where it is in that book. Tap a tab above to see just that section; tap it again to come back to this full view. The filter box searches every entry. Entries for conditions that are active on the open stat block are highlighted. The Advantages, Powers and Complications tabs list the same book entries the \u201c+ From the book\u201d buttons offer.',
 ];
 
 window.REFERENCE = [    {

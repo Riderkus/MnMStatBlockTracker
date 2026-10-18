@@ -101,7 +101,7 @@
                     <input id="f-name" name="name" class="name-input" type="text" placeholder="Character name" required>
                     <label class="pl-label">PL <input id="f-pl" name="pl" type="number" min="0" max="999" step="1" inputmode="numeric" value="10"></label>
                     <!-- Opens the rules reference popup over the stat block. -->
-                    <button type="button" class="btn" id="btn-checks" title="Rules reference for checks and conditions">Checks</button>
+                    <button type="button" class="btn" id="btn-checks" title="Rules reference: checks, conditions, advantages, powers, complications">Reference</button>
                 </div>
 
                 <!-- <fieldset> + <legend> is the semantic way to group related
@@ -261,14 +261,14 @@
     </main>
 
     <!-- ================================================================
-         RULES REFERENCE POPUP. <dialog> is the browser's built-in modal:
+         RULES REFERENCE POPUP (the "Reference" button). <dialog> is the browser's built-in modal:
          showModal() opens it in front of everything with a dimmed backdrop,
          Esc closes it, and focus stays inside while it is open. app.js
          fills #ref-nav and #ref-body from the data in reference.js.
          ================================================================ -->
     <dialog id="ref-dialog" class="ref" aria-labelledby="ref-title">
         <div class="ref-head">
-            <h2 id="ref-title">Checks &amp; conditions</h2>
+            <h2 id="ref-title">Rules reference</h2>
             <input id="ref-search" type="search" placeholder="Filter…" autocomplete="off" aria-label="Filter the reference">
             <button type="button" class="btn small" id="ref-close">Close</button>
         </div>

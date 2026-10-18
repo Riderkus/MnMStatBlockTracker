@@ -155,6 +155,9 @@ textarea {
     min-height: 2.5em;
 }
 
+/* The Notes box at the bottom of the editor uses the sheet font too. */
+textarea[name="notes"] { font-family: var(--font-display); font-size: 1.1rem; line-height: 1.25; }
+
 /* Placeholders should look like hints, not like values. */
 ::placeholder { color: var(--muted); font-weight: 400; opacity: 1; }
 
@@ -315,6 +318,9 @@ button, .chip, .stat, .block-item, .badge, .tab { -webkit-tap-highlight-color: t
  * and below the name (app.js adds this class). Entries with badges keep the
  * tighter padding because the badge row already fills the space. */
 .block-item.no-badges { padding-top: 16px; padding-bottom: 16px; }
+
+/* Overspent power points: a small red badge after the PL in the list. */
+.meta .badge.over { margin-left: 6px; min-width: 18px; padding: 0 5px; text-align: center; color: var(--danger); border-color: var(--danger); font-weight: 700; font-size: 0.85rem; line-height: 1.3; vertical-align: middle; }
 
 /* Small pill showing a condition or the bruise count. */
 .badge {
@@ -481,7 +487,7 @@ fieldset[hidden] { display: none; }
 .table-list .list-row input[type="number"] { width: auto; padding: 4px; }
 .table-list .list-row select { padding: 4px 6px; }
 .table-list .list-row .icon { margin-left: 0; min-height: 30px; min-width: 30px; padding: 2px; }
-.table-list .list-row .note { font-family: var(--font-body); font-size: 0.95rem; color: var(--text); }
+.table-list .list-row .note { font-family: var(--font-display); font-size: 1.05rem; color: var(--text); }   /* note / effect column: same font as the other fields */
 /*                      skill name | ability | ranks | total | x   */
 .skill-row     { grid-template-columns: minmax(0, 1fr) 84px 60px 48px 32px; }
 /*                      advantage  | rank | note        | x        */
@@ -757,7 +763,7 @@ dialog.ref::backdrop { background: rgba(8, 20, 48, 0.65); }
 .info-more:hover { text-decoration: underline; }
 
 /* Long-pressing a chip or stat box must not select text or open a menu. */
-#conditions .chip, .stat, .block-item .badge { -webkit-touch-callout: none; user-select: none; }
+#conditions .chip, .stat, .block-item .badge, .pl-label, .pp-stat, .pp-row { -webkit-touch-callout: none; user-select: none; }
 
 /* Small tags next to an entry's heading. */
 .tag { font-size: 0.75rem; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border-soft); font-weight: 400; letter-spacing: 0; }
