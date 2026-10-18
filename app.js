@@ -56,7 +56,51 @@
         initiative: { min: -999, max: 999 },
         bruises: { min: 0, max: 999 },
         pl: { min: 0, max: 999 },
+        pp: { min: 0, max: 9999 },   // power point fields
     };
+
+    // POWER POINTS (Hero's Handbook: p. 24 starting points, p. 107 abilities,
+    // p. 110 defenses, p. 113 skills, p. 130 advantages).
+    const PP_PER_PL = 15;                       // starting points = power level x 15
+    const PP_ABILITY_COST = 2;                  // per ability rank (a rank below 0 gives points back)
+    const DEFENSE_BASE = { Dodge: 'AGL', Parry: 'FGT', Fortitude: 'STA', Toughness: 'STA', Will: 'AWE' };
+    const PP_MANUAL = ['other'];   // the one category the user types in
+    // (abilities and defenses come from the stat boxes; skills, advantages
+    //  and powers are summed from their lists)
+    const SKILL_ABILITIES = ['STR', 'STA', 'AGL', 'DEX', 'FGT', 'INT', 'AWE', 'PRE'];
+    const OFFENSE_RANGES = ['Close', 'Ranged', 'Perception'];
+    const EP_PER_RANK = 5;   // the Equipment advantage: 5 equipment points per rank (p. 130)
+
+    /**
+     * A list field from a save: an array is cleaned entry by entry, a string
+     * (the old free-text version of the field) is split into entries.
+     */
+    const listify = (value, fromText, clean) => {
+        if (Array.isArray(value)) return value.map(clean);
+        if (typeof value === 'string' && value.trim()) return fromText(value).map(clean);
+        return [];
+    };
+    const splitEntries = (text) => text.split(/[\n;]+|,(?![^(]*\))/).map((s) => s.trim()).filter(Boolean);   // commas outside brackets
+    const textToSkills = (text) => splitEntries(text).map((s) => {
+        const m = s.match(/^(.*?)\s+(\d+)\s*(?:\([+\-]?\d+\))?\.?$/);   // "Acrobatics 8 (+12)"
+        const name = (m ? m[1] : s).trim();
+        const sample = (window.SAMPLES?.skills || []).find((k) => name.toLowerCase().startsWith(k.name.toLowerCase()));
+        return { name, ability: sample ? sample.ability : '', ranks: m ? Number(m[2]) : 0 };
+    });
+    const textToAdvantages = (text) => splitEntries(text).map((s) => {
+        const m = s.match(/^(.*?)\s+(\d+)\.?$/);   // "Evasion 2"
+        return { name: (m ? m[1] : s).trim(), rank: m ? Number(m[2]) : 1, note: '' };
+    });
+    const textToOffense = (text) => splitEntries(text).map((s) => {
+        const m = s.match(/^(.*?)\s*([+\-]\d+)?\s*(?:\((.*)\))?\.?$/);   // "Unarmed +10 (Close, Damage 2)"
+        const inner = (m && m[3] ? m[3] : '').split(',').map((x) => x.trim()).filter(Boolean);
+        const range = inner.find((x) => OFFENSE_RANGES.includes(x)) || 'Close';
+        return { name: (m ? m[1] : s).trim(), bonus: m && m[2] ? Number(m[2]) : 0, range, effect: inner.filter((x) => x !== range).join(', ') };
+    });
+    const textToComplications = (text) => text.split(/[\n;]+|\.\s+|,\s*(?=[A-Z])/).map((s) => s.trim().replace(/\.$/, '')).filter(Boolean).map((name) => ({ name, note: '' }));
+
+    /** "+5", "+0", "-3": a bonus always shows its sign. For fields marked data-plus. */
+    const withPlus = (v) => (v >= 0 ? '+' : '') + v;
 
     /** Rounds to a whole number and keeps it within range; junk becomes 0 (or the minimum). */
     const clampTo = (range, value) => {
@@ -363,12 +407,17 @@
         conditions: [],            // e.g. ['Dazed', 'Prone'] — only names that are ON
         conditionDetails: {},      // e.g. { Unaware: 'Visual, Tactile', Impaired: 'Strength' }
         bruises: 0,                // how many Bruised results the character has taken
-        powers: [],                // array of { name: 'Flight 6', desc: 'Wings' }
-        skills: '',                // free text
-        advantages: '',
-        offense: '',
-        complications: '',
-        notes: '',
+        // Power points. total: null means "use PL x 15"; the four manual
+        // categories are typed in, abilities and defenses are computed.
+        pp: { earned: 0, other: 0 },   // earned: points awarded on top of PL x 15; other: spent on anything not listed
+        powers: [],                // { name, rank, desc, cost, perRank } — perRank set from a book sample keeps cost = rank x perRank
+        // Lists, one object per entry (see the row builders in section 5b):
+        skills: [],                // { name, ability: 'AGL' | '', ranks }
+        advantages: [],            // { name, rank, note }
+        offense: [],               // { name, bonus, range: 'Close' | 'Ranged' | 'Perception', effect }
+        complications: [],         // { name, note }
+        equipment: [],             // { name, cost, note } — only shown while an Equipment advantage is in the list
+        notes: '',                 // free text
         updated: Date.now(),       // timestamp of the last edit; used when merging imports
     });
 
@@ -447,6 +496,34 @@
                 b.bruises = clampTo(RANGES.bruises, b.bruises);
                 b.initiative = clampTo(RANGES.initiative, b.initiative);
                 b.pl = clampTo(RANGES.pl, b.pl);
+                // Powers carry only a name and a description (an older save may
+                // have stored a box height; it is dropped).
+                b.powers = (Array.isArray(b.powers) ? b.powers : []).map((p) => ({
+                    name: String(p?.name ?? ''), desc: String(p?.desc ?? ''), cost: clampTo(RANGES.pp, p?.cost),
+                    rank: clampTo(RANGES.pp, p?.rank), perRank: Number.isFinite(Number(p?.perRank)) && p?.perRank != null ? Number(p.perRank) : null,
+                }));
+                // The four list sections. Saves from before they were lists hold
+                // free text, which is split into entries as best we can.
+                b.skills = listify(b.skills, textToSkills, (e) => ({ name: String(e?.name ?? ''), ability: SKILL_ABILITIES.includes(e?.ability) ? e.ability : '', ranks: clampTo(RANGES.pp, e?.ranks) }));
+                b.advantages = listify(b.advantages, textToAdvantages, (e) => ({ name: String(e?.name ?? ''), rank: clampTo(RANGES.pp, e?.rank ?? 1), note: String(e?.note ?? '') }));
+                b.offense = listify(b.offense, textToOffense, (e) => ({ name: String(e?.name ?? ''), bonus: clampTo(RANGES.abilities, e?.bonus), range: OFFENSE_RANGES.includes(e?.range) ? e.range : 'Close', effect: String(e?.effect ?? '') }));
+                b.complications = listify(b.complications, textToComplications, (e) => ({ name: String(e?.name ?? ''), note: String(e?.note ?? '') }));
+                b.equipment = listify(b.equipment, () => [], (e) => ({ name: String(e?.name ?? ''), cost: clampTo(RANGES.pp, e?.cost), note: String(e?.note ?? '') }));
+                // Power points: fill in anything an older save lacks.
+                const pp = (b.pp && typeof b.pp === 'object') ? b.pp : {};
+                // Earlier saves had an editable "total" instead of "earned": turn an
+                // override above the base into earned points so nothing is lost.
+                const base = clampTo(RANGES.pl, b.pl) * PP_PER_PL;
+                const legacyEarned = (pp.total != null && pp.total !== '' && Number(pp.total) > base) ? Number(pp.total) - base : 0;
+                b.pp = { earned: clampTo(RANGES.pp, pp.earned ?? legacyEarned) };
+                for (const k of PP_MANUAL) b.pp[k] = clampTo(RANGES.pp, pp[k]);
+                // Saves from before powers, skills and advantages were itemised
+                // kept lump sums under pp.powers / pp.skills / pp.advantages.
+                // Where the new list gives nothing, move the lump to Other so
+                // the spent total does not silently drop.
+                if (pp.powers > 0 && !b.powers.some((p) => p.cost > 0)) b.pp.other = clampTo(RANGES.pp, b.pp.other + Number(pp.powers));
+                if (pp.skills > 0 && !b.skills.some((s) => s.ranks > 0)) b.pp.other = clampTo(RANGES.pp, b.pp.other + Number(pp.skills));
+                if (pp.advantages > 0 && !b.advantages.length) b.pp.other = clampTo(RANGES.pp, b.pp.other + Number(pp.advantages));
                 return b;
             }),
         };
@@ -541,7 +618,7 @@
         onclick: () => {
             const v = Number(input.value) || 0;
             if (v === 0) return;
-            input.value = String(-v);
+            input.value = input.dataset.plus ? withPlus(-v) : String(-v);
             input.dispatchEvent(new Event('input', { bubbles: true }));   // store it the normal way
         },
     });
@@ -648,6 +725,51 @@
      *    That is simple and fast enough for a list of a few hundred items.
      * ====================================================================== */
 
+    /**
+     * Works out the power point picture for a block:
+     *   abilities = sum of ability ranks x 2 (negative ranks give points back)
+     *   defenses  = each defense's ranks above its base ability, 1 point each
+     *               (a defense below base is just 0, not a refund)
+     *   the four manual categories as typed
+     *   total     = the override if set, otherwise PL x 15
+     */
+    const computePP = (block) => {
+        const abilities = ABILITIES.reduce((n, k) => n + (block.abilities[k] || 0), 0) * PP_ABILITY_COST;
+        const defenses = DEFENSES.reduce((n, d) => n + Math.max(0, (block.defenses[d] || 0) - (block.abilities[DEFENSE_BASE[d]] || 0)), 0);
+        const powers = block.powers.reduce((n, p) => n + (p.cost || 0), 0);   // sum of the per-power cost fields
+        const skills = Math.ceil(block.skills.reduce((n, s) => n + (s.ranks || 0), 0) / 2);   // 1 point per 2 ranks, over all skills
+        const advantages = block.advantages.reduce((n, a) => n + (a.rank || 0), 0);           // 1 point per rank
+        const manual = Object.fromEntries(PP_MANUAL.map((k) => [k, block.pp[k] || 0]));
+        const spent = abilities + defenses + powers + skills + advantages + PP_MANUAL.reduce((n, k) => n + manual[k], 0);
+        const base = block.pl * PP_PER_PL;          // what the power level grants
+        const earned = block.pp.earned || 0;        // awarded by the GM on top (p. 262)
+        const total = base + earned;
+        return { abilities, defenses, powers, skills, advantages, ...manual, spent, base, earned, total, left: total - spent };
+    };
+
+    /** Fills the Power points section from computePP(). */
+    const renderPP = (block) => {
+        const pp = computePP(block);
+        $('#pp-abilities').textContent = pp.abilities;
+        $('#pp-defenses').textContent = pp.defenses;
+        $('#pp-powers').textContent = pp.powers;
+        $('#pp-skills').textContent = pp.skills;
+        $('#pp-advantages').textContent = pp.advantages;
+        $('#pp-spent').textContent = pp.spent;
+        const left = $('#pp-left');
+        left.textContent = pp.left;
+        left.classList.toggle('over', pp.left < 0);   // red when overspent
+        $('#pp-base').textContent = pp.base;
+        $('#pp-base-pl').textContent = block.pl;
+        $('#pp-total').textContent = pp.total;
+        const earnedInput = $('#f-pp-earned');
+        if (document.activeElement !== earnedInput) earnedInput.value = pp.earned;
+        for (const k of PP_MANUAL) {
+            const input = $(`[data-pp="${k}"]`);
+            if (document.activeElement !== input) input.value = block.pp[k] || 0;
+        }
+    };
+
     /** Rebuild the sidebar list, applying the search filter and sorting by name. */
     const renderList = () => {
         const q = searchEl.value.trim().toLowerCase();
@@ -679,7 +801,7 @@
             },
                 el('div', {},
                     el('div', { class: 'name', text: b.name || '(unnamed)' }),
-                    el('div', { class: 'meta', text: `PL ${b.pl}` }),
+                    el('div', { class: 'meta', text: `PL ${b.pl} \u00b7 ${computePP(b).spent}/${computePP(b).total} pp` }),
                 ),
                 badges,
             );
@@ -696,24 +818,71 @@
      * the shared form handler in section 6.
      */
     const renderPowers = (block) => {
-        const container = $('#powers');
-        container.replaceChildren(...block.powers.map((p, i) =>
-            el('div', { class: 'power-row' },
-                el('input', {
-                    class: 'power-name', type: 'text', placeholder: 'Power name & rank (e.g. Flight 6)', value: p.name,
-                    oninput: (e) => { p.name = e.target.value; touch(block); },
-                }),
-                el('button', {
-                    class: 'btn small icon power-remove', type: 'button', title: 'Remove power', text: '✕',
-                    // splice(i, 1) removes one item at index i, then we redraw the rows.
-                    onclick: () => { block.powers.splice(i, 1); touch(block); renderPowers(block); },
-                }),
-                el('textarea', {
-                    class: 'power-desc', rows: '2', placeholder: 'Effects, extras, flaws, descriptors…',
-                    oninput: (e) => { p.desc = e.target.value; touch(block); },
-                }, p.desc || ''),
-            )
-        ));
+        $('#powers').replaceChildren(...block.powers.map((p) => powerRow(block, p)));
+        fitAllTextareas();   // sizes are only measurable once the rows are in the page
+    };
+
+    /**
+     * Makes a description box exactly as tall as its text. Setting the height
+     * to "auto" first lets it shrink when text is deleted; scrollHeight is then
+     * the height the content really needs. Nothing is stored: the right height
+     * depends on the screen width and font, so it is worked out fresh each
+     * time instead of being saved with the block.
+     */
+    const fitTextarea = (ta) => {
+        ta.style.height = 'auto';
+        ta.style.height = `${ta.scrollHeight}px`;
+    };
+    /** Every text box in the editor: skills, notes and so on, plus the power descriptions. */
+    const fitAllTextareas = () => { for (const ta of form.querySelectorAll('textarea')) fitTextarea(ta); };
+    // Text re-wraps when the window changes width, so refit then too.
+    window.addEventListener('resize', fitAllTextareas);
+    // Any typing in any text box: refit that box. (Power descriptions do this
+    // in their own handler as well; doing it twice is harmless.)
+    form.addEventListener('input', (e) => { if (e.target.tagName === 'TEXTAREA') fitTextarea(e.target); });
+
+    /**
+     * One power row. Rows are added and removed individually (see the add
+     * button and the remove handler) rather than redrawing the whole list.
+     */
+    const powerRow = (block, p) => {
+        const desc = el('textarea', {
+            class: 'power-desc', rows: '2', placeholder: 'Effects, extras, flaws, descriptors\u2026',
+            oninput: (e) => { p.desc = e.target.value; touch(block); fitTextarea(e.target); },
+        }, p.desc || '');
+
+        // The cost field feeds the Powers line of the Power points section.
+        // For a power taken from the book with a plain per-rank cost, the
+        // cost follows the rank automatically until you edit it by hand.
+        const cost = numberField(RANGES.pp, p.cost, (v) => { p.cost = v; p.perRank = null; touch(block); renderPP(block); renderList(); });
+        const rank = numberField(RANGES.pp, p.rank, (v) => {
+            p.rank = v;
+            if (p.perRank != null) { p.cost = clampTo(RANGES.pp, v * p.perRank); cost.value = p.cost; }
+            touch(block); renderPP(block); renderList(); renderEquipment(block);
+        });
+        const row = el('div', { class: 'power-row' },
+            el('input', {
+                class: 'power-name', type: 'text', placeholder: 'Power name (e.g. Flight)', value: p.name,
+                oninput: (e) => { p.name = e.target.value; touch(block); },
+            }),
+            el('label', { class: 'power-rank', title: 'Rank' }, document.createTextNode('Rank'), rank),
+            el('label', { class: 'power-cost', title: 'Power points spent on this power' }, document.createTextNode('PP'), cost),
+            el('button', {
+                class: 'btn small icon power-remove', type: 'button', title: 'Remove power', text: '\u2715',
+                // Find the power by identity (not a stored index, which would go
+                // stale once another row is removed), drop it, remove just this row.
+                onclick: () => {
+                    const i = block.powers.indexOf(p);
+                    if (i >= 0) block.powers.splice(i, 1);
+                    touch(block);
+                    row.remove();
+                    renderPP(block);   // its cost no longer counts
+                    renderList();
+                },
+            }),
+            desc,
+        );
+        return row;
     };
 
     /** Copy the selected block's values into the form, or hide the form if none. */
@@ -730,7 +899,7 @@
         // form.elements.NAME finds the input with name="NAME".
         form.elements.name.value = block.name;
         form.elements.pl.value = block.pl;
-        form.elements.initiative.value = block.initiative;
+        form.elements.initiative.value = withPlus(block.initiative);
         form.elements.bruises.value = block.bruises;
 
         // Ability and defense inputs: look up block.abilities.STR etc.
@@ -742,11 +911,12 @@
         syncConditionChips(block);
 
         // Plain text areas.
-        for (const key of ['skills', 'advantages', 'offense', 'complications', 'notes']) {
-            form.elements[key].value = block[key];
-        }
+        form.elements.notes.value = block.notes;
+        renderLists(block);
+        fitAllTextareas();   // the editor is visible by now, so heights can be measured
 
         renderPowers(block);
+        renderPP(block);
     };
 
     /** Redraw everything. */
@@ -828,11 +998,22 @@
             t.checked ? set.add(t.dataset.condition) : set.delete(t.dataset.condition);
             block.conditions = [...set];
             reconcileConditions(block);   // apply supersede rules, tidy details, redraw chips
+        } else if (t.dataset.pp) {
+            // A power point field (earned, other): clamp and store.
+            const v = clampTo(RANGES.pp, t.value);
+            block.pp[t.dataset.pp] = v;
+            if (t.value !== '' && Number(t.value) !== v) t.value = v;
         } else if (t.name in RANGES) {
             // pl, initiative, bruises: same clamping as the stat boxes.
             const v = clampTo(RANGES[t.name], t.value);
             block[t.name] = v;
-            if (t.value !== '' && Number(t.value) !== v) t.value = v;
+            if (t.dataset.plus) {
+                // Initiative: rewrite as "+5" / "0" / "-3" after every change,
+                // but leave a lone sign alone while the number is being typed.
+                if (!/^[+\-]?$/.test(t.value) && t.value !== withPlus(v)) t.value = withPlus(v);
+            } else if (t.value !== '' && Number(t.value) !== v) {
+                t.value = v;
+            }
         } else if (t.name && t.name in block) {
             // Any other named field (name, skills, notes...) is stored as text.
             block[t.name] = t.value;
@@ -841,7 +1022,9 @@
         }
 
         touch(block);
-        renderList();   // keep the name / PL / badges in the sidebar current
+        renderPP(block);             // abilities, defenses and PL all feed the power point totals
+        if (t.dataset.group === 'abilities') refreshSkillTotals(block);   // skill totals include the ability rank
+        renderList();                // keep the name / PL / badges in the sidebar current
     });
 
     // Pressing Enter in a text input would normally submit the form and reload
@@ -853,7 +1036,7 @@
     // dispatching "input" runs the normal store-and-clamp path.
     form.addEventListener('change', (e) => {
         const t = e.target;
-        if (t.type === 'number' && t.value.trim() === '') {
+        if ((t.type === 'number' || t.dataset.plus) && /^[+\-]?$/.test(t.value.trim())) {
             t.value = '0';
             t.dispatchEvent(new Event('input', { bubbles: true }));
         }
@@ -866,11 +1049,14 @@
     $('#btn-add-power').addEventListener('click', () => {
         const block = selected();
         if (!block) return;
-        block.powers.push({ name: '', desc: '' });
+        const p = { name: '', rank: 0, desc: '', cost: 0, perRank: null };
+        block.powers.push(p);
         touch(block);
-        renderPowers(block);
-        // ?. = "optional chaining": do nothing if the element isn't found.
-        $('#powers .power-row:last-child .power-name')?.focus();
+        // Append one row; the existing rows are left alone.
+        const row = powerRow(block, p);
+        $('#powers').append(row);
+        fitTextarea(row.querySelector('.power-desc'));
+        row.querySelector('.power-name').focus();
     });
 
     // Wire the remaining buttons to their actions.
@@ -1292,6 +1478,238 @@
 
     // Rotating to landscape / resizing to desktop: make sure it is shown.
     narrowScreen.addEventListener('change', () => topbar.classList.remove('bar-hidden'));
+
+    /* =========================================================================
+     * 5b. LIST SECTIONS — skills, advantages, offense and complications work
+     *     like the powers list: one row per entry, added and removed one at a
+     *     time. Each has "+ Add" for a blank row and (except offense) "+ From
+     *     the book", which opens a picker over window.SAMPLES (samples.js).
+     * ====================================================================== */
+
+    /** A clamped whole-number input that reports its value through onChange. */
+    const numberField = (range, value, onChange, extra = {}) => el('input', {
+        type: 'number', min: range.min, max: range.max, step: '1', value: value || 0, ...extra,
+        inputmode: range.min >= 0 ? 'numeric' : undefined,
+        oninput: (e) => {
+            const v = clampTo(range, e.target.value);
+            if (e.target.value !== '' && Number(e.target.value) !== v) e.target.value = v;
+            onChange(v);
+        },
+    });
+
+    /** A <select> whose options are plain strings; "" shows the placeholder. */
+    const selectField = (options, value, onChange, placeholder) => {
+        const sel = el('select', { onchange: (e) => onChange(e.target.value) },
+            ...(placeholder ? [el('option', { value: '', text: placeholder })] : []),
+            ...options.map((o) => el('option', { value: o, text: o })),
+        );
+        sel.value = value || '';
+        return sel;
+    };
+
+    /** The remove button every row ends with: drop the entry, remove the row, refresh totals. */
+    const removeButton = (block, list, entry, row) => el('button', {
+        class: 'btn small icon', type: 'button', title: 'Remove', text: '\u2715',
+        onclick: () => {
+            const i = list.indexOf(entry);
+            if (i >= 0) list.splice(i, 1);
+            row.remove();
+            touch(block); renderPP(block); renderList(); renderEquipment(block);
+        },
+    });
+
+    /** Skill total = ranks + the rank of its ability (if one is chosen). */
+    const skillTotal = (block, s) => (s.ranks || 0) + (s.ability ? (block.abilities[s.ability] || 0) : 0);
+    const refreshSkillTotals = (block) => {
+        for (const row of document.querySelectorAll('#skills .list-row')) row._refresh?.(block);
+    };
+
+    // Skills and advantages are drawn as table lines: the column headings are
+    // in index.html (.table-head) and the row's grid columns in style.css.
+    const skillRow = (block, s) => {
+        const total = el('output', { class: 'total', title: 'Ranks + ability rank' });
+        const row = el('div', { class: 'list-row skill-row' },
+            el('input', { type: 'text', placeholder: 'Skill (e.g. Expertise: Science)', value: s.name, oninput: (e) => { s.name = e.target.value; touch(block); } }),
+            selectField(SKILL_ABILITIES, s.ability, (v) => { s.ability = v; touch(block); row._refresh(block); }, '\u2014'),
+            numberField(RANGES.pp, s.ranks, (v) => { s.ranks = v; touch(block); row._refresh(block); renderPP(block); renderList(); }),
+            total,
+        );
+        row._refresh = (b) => { total.textContent = (skillTotal(b, s) >= 0 ? '+' : '') + skillTotal(b, s); };
+        row._refresh(block);
+        row.append(removeButton(block, block.skills, s, row));
+        return row;
+    };
+
+    const advantageRow = (block, a) => {
+        const row = el('div', { class: 'list-row advantage-row' },
+            el('input', { type: 'text', placeholder: 'Advantage', value: a.name, oninput: (e) => { a.name = e.target.value; touch(block); renderEquipment(block); } }),
+            numberField(RANGES.pp, a.rank, (v) => { a.rank = v; touch(block); renderPP(block); renderList(); renderEquipment(block); }),
+            el('input', { class: 'note', type: 'text', placeholder: 'Note (what it does, which skill or attack\u2026)', value: a.note || '', oninput: (e) => { a.note = e.target.value; touch(block); } }),
+        );
+        row.append(removeButton(block, block.advantages, a, row));
+        return row;
+    };
+
+    const offenseRow = (block, o) => {
+        const row = el('div', { class: 'list-row offense-row' },
+            el('input', { type: 'text', placeholder: 'Attack (e.g. Unarmed)', value: o.name, oninput: (e) => { o.name = e.target.value; touch(block); } }),
+            numberField(RANGES.abilities, o.bonus, (v) => { o.bonus = v; touch(block); }),
+            selectField(OFFENSE_RANGES, o.range, (v) => { o.range = v; touch(block); }),
+            el('input', { class: 'note', type: 'text', placeholder: 'Effect (e.g. Damage 2)', value: o.effect, oninput: (e) => { o.effect = e.target.value; touch(block); } }),
+        );
+        row.append(removeButton(block, block.offense, o, row));
+        return row;
+    };
+
+    const complicationRow = (block, c) => {
+        const row = el('div', { class: 'list-row' },
+            el('input', { class: 'grow', type: 'text', placeholder: 'Complication (e.g. Motivation: Justice)', value: c.name, oninput: (e) => { c.name = e.target.value; touch(block); } }),
+        );
+        row.append(removeButton(block, block.complications, c, row));
+        row.append(el('textarea', { class: 'note', rows: '1', placeholder: 'How it plays out for this character', oninput: (e) => { c.note = e.target.value; touch(block); } }, c.note || ''));
+        return row;
+    };
+
+    /**
+     * Equipment points: the ranks of every advantage called "Equipment"
+     * (case-insensitive, so "Equipment 2" or "equipment: utility belt" count),
+     * times 5. The Equipment section only shows while that rank is above 0.
+     */
+    const computeEP = (block) => {
+        const rank = block.advantages.filter((a) => /^equipment\b/i.test(a.name.trim())).reduce((n, a) => n + (a.rank || 0), 0);
+        const total = rank * EP_PER_RANK;
+        const spent = block.equipment.reduce((n, e) => n + (e.cost || 0), 0);
+        return { rank, total, spent, left: total - spent };
+    };
+    const renderEquipment = (block) => {
+        const ep = computeEP(block);
+        const section = $('#equipment-section');
+        section.hidden = ep.rank === 0;
+        $('#ep-rank').textContent = ep.rank;
+        $('#ep-total').textContent = ep.total;
+        $('#ep-spent').textContent = ep.spent;
+        const left = $('#ep-left');
+        left.textContent = ep.left;
+        left.classList.toggle('over', ep.left < 0);
+    };
+
+    const equipmentRow = (block, e) => {
+        const row = el('div', { class: 'list-row equipment-row' },
+            el('input', { type: 'text', placeholder: 'Item (e.g. Pistol)', value: e.name, oninput: (ev) => { e.name = ev.target.value; touch(block); } }),
+            numberField(RANGES.pp, e.cost, (v) => { e.cost = v; touch(block); renderEquipment(block); }),
+            el('input', { class: 'note', type: 'text', placeholder: 'Note (effect, features\u2026)', value: e.note || '', oninput: (ev) => { e.note = ev.target.value; touch(block); } }),
+        );
+        row.append(removeButton(block, block.equipment, e, row));
+        return row;
+    };
+
+    /**
+     * Everything the add buttons and the picker need to know per section:
+     * where the rows go, how to make a blank entry, how to draw a row, which
+     * sample list feeds the picker and how a sample becomes an entry.
+     */
+    const SECTIONS = {
+        skills: {
+            container: '#skills', list: (b) => b.skills, row: skillRow,
+            blank: () => ({ name: '', ability: '', ranks: 0 }),
+            samples: 'skills', label: 'Skills',
+            fromSample: (k) => ({ name: ['Expertise', 'Close Combat', 'Ranged Combat'].includes(k.name) ? `${k.name}: ` : k.name, ability: k.ability, ranks: 1 }),
+            describe: (k) => `${k.ability}${k.trained ? ' \u00b7 trained only' : ''} \u2014 ${k.text}`,
+        },
+        advantages: {
+            container: '#advantages', list: (b) => b.advantages, row: advantageRow,
+            blank: () => ({ name: '', rank: 1, note: '' }),
+            samples: 'advantages', label: 'Advantages',
+            fromSample: (k) => ({ name: k.name, rank: 1, note: k.effect }),
+            describe: (k) => `${k.type}${k.ranked ? ' \u00b7 ranked' : ''} \u2014 ${k.effect}`,
+        },
+        offense: {
+            container: '#offense', list: (b) => b.offense, row: offenseRow,
+            blank: () => ({ name: '', bonus: 0, range: 'Close', effect: '' }),
+        },
+        complications: {
+            container: '#complications', list: (b) => b.complications, row: complicationRow,
+            blank: () => ({ name: '', note: '' }),
+            samples: 'complications', label: 'Complications',
+            fromSample: (k) => ({ name: k.name, note: k.text }),
+            describe: (k) => k.text,
+        },
+        equipment: {
+            container: '#equipment', list: (b) => b.equipment, row: equipmentRow,
+            blank: () => ({ name: '', cost: 0, note: '' }),
+        },
+        powers: {
+            container: '#powers', list: (b) => b.powers, row: powerRow,
+            blank: () => ({ name: '', rank: 0, desc: '', cost: 0, perRank: null }),
+            samples: 'powers', label: 'Powers',
+            fromSample: (k) => {
+                const bits = [k.effect ? `Effect: ${k.effect}.` : '', k.type ? `${k.type} effect.` : '', k.action ? `Action: ${k.action}.` : '', k.range ? `Range: ${k.range}.` : '', k.duration ? `Duration: ${k.duration}.` : '', k.resist ? `Resisted by ${k.resist}.` : '', `Cost: ${k.cost}.`, k.text].filter(Boolean);
+                const rank = 1;
+                return { name: k.name, rank, desc: bits.join(' '), perRank: k.perRank, cost: k.perRank != null ? k.perRank * rank : (k.flat || 0) };
+            },
+            describe: (k) => `${k.kind === 'sample' ? 'Sample power' : (k.type || 'Effect')} \u00b7 ${k.cost} \u2014 ${k.text}`,
+        },
+    };
+
+    /** Draw every list section for a block (used when a block is opened). */
+    const renderLists = (block) => {
+        for (const sec of Object.values(SECTIONS)) {
+            $(sec.container).replaceChildren(...sec.list(block).map((entry) => sec.row(block, entry)));
+        }
+        renderEquipment(block);
+        fitAllTextareas();
+    };
+
+    /** Append one entry's row, refresh totals and put the cursor in its first field. */
+    const addEntry = (kind, entry) => {
+        const block = selected();
+        if (!block) return;
+        const sec = SECTIONS[kind];
+        sec.list(block).push(entry);
+        const row = sec.row(block, entry);
+        $(sec.container).append(row);
+        for (const ta of row.querySelectorAll('textarea')) fitTextarea(ta);
+        touch(block); renderPP(block); renderList(); renderEquipment(block);
+        row.querySelector('input[type="text"]')?.focus();
+    };
+
+    // "+ Add" buttons (data-add) and "+ From the book" buttons (data-pick).
+    for (const btn of document.querySelectorAll('[data-add]')) {
+        btn.addEventListener('click', () => addEntry(btn.dataset.add, SECTIONS[btn.dataset.add].blank()));
+    }
+    for (const btn of document.querySelectorAll('[data-pick]')) {
+        btn.addEventListener('click', () => openPicker(btn.dataset.pick));
+    }
+
+    // --- The picker dialog: a filterable list of samples for one section.
+    const pickDialog = $('#pick-dialog');
+    const pickSearch = $('#pick-search');
+    let pickKind = null;
+
+    const renderPicker = () => {
+        const sec = SECTIONS[pickKind];
+        const q = pickSearch.value.trim().toLowerCase();
+        const items = (window.SAMPLES?.[sec.samples] || []).filter((k) => !q || `${k.name} ${sec.describe(k)}`.toLowerCase().includes(q));
+        $('#pick-body').replaceChildren(...(items.length ? items.map((k) =>
+            el('button', { type: 'button', class: 'pick-item', onclick: () => { addEntry(pickKind, sec.fromSample(k)); pickDialog.close(); } },
+                el('span', { class: 'pick-name', text: k.name }),
+                el('span', { class: 'pick-desc', text: sec.describe(k) }),
+            )
+        ) : [el('p', { class: 'ref-empty', text: 'Nothing matches that filter.' })]));
+    };
+    const openPicker = (kind) => {
+        if (!selected()) return;
+        pickKind = kind;
+        $('#pick-title').textContent = `${SECTIONS[kind].label} from the book`;
+        pickSearch.value = '';
+        renderPicker();
+        pickDialog.showModal();
+        $('#pick-body').scrollTop = 0;
+        pickSearch.focus();
+    };
+    pickSearch.addEventListener('input', renderPicker);
+    $('#pick-close').addEventListener('click', () => pickDialog.close());
+    pickDialog.addEventListener('click', (e) => { if (e.target === pickDialog) pickDialog.close(); });
 
     /* =========================================================================
      * 9. SERVICE WORKER — registers sw.js so the app works offline.

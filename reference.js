@@ -185,6 +185,20 @@ window.REFERENCE = [    {
                     ['Will', 'Awareness. Resists mental and spiritual attacks.'],
                 ],
             },
+            {
+                name: 'Power point costs',
+                text: 'A hero starts with 15 power points per power level (150 at PL 10) and earns more through play. These costs are what the Power points section of the editor uses: abilities and defenses are read from the stat boxes, skills, advantages and powers from their lists, and only Other is typed in. Once spent, points cannot be moved without the GM\u2019s say-so. (p. 24, 107, 110, 113, 130)',
+                rows: [
+                    ['Starting points', 'Power level \u00d7 15'],
+                    ['Earned points', 'Usually 1 per adventure or session, 2 for a hard one, plus a possible bonus at the end of a long one. Spent between adventures, limited by the series power level; the GM may raise the level once about 15 more points have been earned. (p. 262)'],
+                    ['Abilities', '2 points per rank. A rank below 0 gives 2 points back per rank.'],
+                    ['Defenses', '1 point per rank above the base ability. Toughness is raised only through advantages and powers.'],
+                    ['Skills', '1 point per 2 ranks'],
+                    ['Advantages', '1 point per rank'],
+                    ['Equipment', 'The Equipment advantage gives 5 equipment points per rank to spend on gear (p. 130); the Equipment section appears while the advantage is on the sheet'],
+                    ['Powers', 'Base cost per rank plus extras, minus flaws; see the Powers chapter'],
+                ],
+            },
         ],
     },
     {

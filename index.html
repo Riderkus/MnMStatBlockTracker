@@ -90,7 +90,11 @@
                  reads and writes them through form.elements.NAME, and a single
                  "input" listener on the form catches edits to all of them.
                  autocomplete="off" stops the browser suggesting old values. -->
-            <form id="block-form" autocomplete="off">
+            <!-- spellcheck="false" is inherited by every field inside: game
+                 terms and power names would otherwise be covered in red
+                 underlines that browsers leave in place even when you are
+                 not editing the field. -->
+            <form id="block-form" autocomplete="off" spellcheck="false">
 
                 <!-- Name and Power Level side by side. -->
                 <div class="editor-head">
@@ -114,7 +118,38 @@
                     <div class="grid grid-5" id="defenses"></div>
                     <!-- Initiative can be negative; app.js adds a +/- button after it that shows
                          while the field has the cursor on touch screens. -->
-                    <label class="inline-field">Initiative <input id="f-initiative" name="initiative" type="number" min="-999" max="999" step="1" value="0"></label>
+                    <!-- A text field rather than a number field so it can show a leading "+"
+                         (number fields refuse one). data-plus tells app.js to format it;
+                         inputmode asks phones for a digit keypad; pattern limits typing
+                         to digits and a sign. -->
+                    <label class="inline-field">Initiative <input id="f-initiative" name="initiative" type="text" inputmode="numeric" pattern="[+\-]?[0-9]*" data-plus="1" value="+0"></label>
+                </fieldset>
+
+                <fieldset>
+                    <legend>Power points</legend>
+                    <!-- Totals. Earned is what the GM has awarded and is the one
+                         field you type into; Base (power level x 15), Total, Spent
+                         and Left are worked out by app.js. -->
+                    <div class="pp-summary">
+                        <label class="inline-field pp-earned" title="Power points awarded by the GM on top of the base">Earned
+                            <input id="f-pp-earned" data-pp="earned" type="number" min="0" max="9999" step="1" inputmode="numeric" value="0">
+                        </label>
+                        <div class="pp-stat quiet" title="Power level x 15">Base <small>(PL <span id="pp-base-pl">10</span>)</small> <output id="pp-base">150</output></div>
+                        <div class="pp-stat quiet">Total <output id="pp-total">150</output></div>
+                        <div class="pp-stat">Spent <output id="pp-spent">0</output></div>
+                        <div class="pp-stat">Left <output id="pp-left">150</output></div>
+                    </div>
+                    <!-- Where the points went. Everything but Other is worked
+                         out: abilities and defenses from the boxes above, powers,
+                         skills and advantages from their lists below. -->
+                    <div class="pp-grid">
+                        <div class="pp-row"><span>Abilities <small>2 per rank</small></span><output id="pp-abilities">0</output></div>
+                        <div class="pp-row"><span>Defenses <small>1 per rank over the base ability</small></span><output id="pp-defenses">0</output></div>
+                        <div class="pp-row"><span>Skills <small>1 per 2 ranks, from the Skills list</small></span><output id="pp-skills">0</output></div>
+                        <div class="pp-row"><span>Advantages <small>1 per rank, from the Advantages list</small></span><output id="pp-advantages">0</output></div>
+                        <div class="pp-row"><span>Powers <small>sum of the PP fields in the Powers list</small></span><output id="pp-powers">0</output></div>
+                        <label class="pp-row"><span>Other <small>equipment, anything else</small></span><input data-pp="other" type="number" min="0" max="9999" step="1" inputmode="numeric" value="0"></label>
+                    </div>
                 </fieldset>
 
                 <fieldset>
@@ -135,31 +170,74 @@
 
                 <fieldset>
                     <legend>Powers</legend>
-                    <!-- Filled by app.js with one row per power (name + description + remove). -->
+                    <!-- Filled by app.js with one row per power (name + PP cost + description + remove). -->
                     <div id="powers" class="repeat-list"></div>
-                    <button type="button" class="btn small" id="btn-add-power">+ Add power</button>
+                    <div class="list-actions">
+                        <button type="button" class="btn small" id="btn-add-power">+ Add power</button>
+                        <button type="button" class="btn small" data-pick="powers">+ From the book</button>
+                    </div>
                 </fieldset>
 
                 <!-- The rest are plain free-text areas. Their name="" matches
                      the field name on the block object in app.js. -->
+                <!-- The next four sections are lists like Powers: one row per
+                     entry, filled by app.js. "+ Add" makes a blank row; "+ From
+                     the book" opens the picker (the dialog at the bottom of the
+                     page) over the samples in samples.js. -->
                 <fieldset>
                     <legend>Skills</legend>
-                    <textarea name="skills" rows="3" placeholder="Acrobatics 8 (+12), Perception 6 (+8)…"></textarea>
+                    <!-- Column headings; the rows app.js adds use the same grid. -->
+                    <div class="table-head skill-row"><span>Skill</span><span>Ability</span><span>Ranks</span><span>Total</span><span></span></div>
+                    <div id="skills" class="repeat-list table-list"></div>
+                    <div class="list-actions">
+                        <button type="button" class="btn small" data-add="skills">+ Add skill</button>
+                        <button type="button" class="btn small" data-pick="skills">+ From the book</button>
+                    </div>
                 </fieldset>
 
                 <fieldset>
                     <legend>Advantages</legend>
-                    <textarea name="advantages" rows="2" placeholder="Agile Feint, Evasion 2, Improved Initiative…"></textarea>
+                    <div class="table-head advantage-row"><span>Advantage</span><span>Rank</span><span class="note">Note</span><span></span></div>
+                    <div id="advantages" class="repeat-list table-list"></div>
+                    <div class="list-actions">
+                        <button type="button" class="btn small" data-add="advantages">+ Add advantage</button>
+                        <button type="button" class="btn small" data-pick="advantages">+ From the book</button>
+                    </div>
+                </fieldset>
+
+                <!-- Only shown while an advantage named "Equipment" is in the
+                     list above (app.js toggles the hidden attribute). Tracks
+                     equipment points: 5 per rank of that advantage. -->
+                <fieldset id="equipment-section" hidden>
+                    <legend>Equipment</legend>
+                    <div class="pp-summary">
+                        <div class="pp-stat quiet" title="Equipment advantage rank x 5">Points <small>(rank <span id="ep-rank">0</span> &times; 5)</small> <output id="ep-total">0</output></div>
+                        <div class="pp-stat">Spent <output id="ep-spent">0</output></div>
+                        <div class="pp-stat">Left <output id="ep-left">0</output></div>
+                    </div>
+                    <div class="table-head equipment-row"><span>Item</span><span>EP</span><span class="note">Note</span><span></span></div>
+                    <div id="equipment" class="repeat-list table-list"></div>
+                    <div class="list-actions">
+                        <button type="button" class="btn small" data-add="equipment">+ Add item</button>
+                    </div>
                 </fieldset>
 
                 <fieldset>
                     <legend>Offense</legend>
-                    <textarea name="offense" rows="3" placeholder="Unarmed +10 (Close, Damage 2)…"></textarea>
+                    <div class="table-head offense-row"><span>Attack</span><span>Bonus</span><span>Range</span><span class="note">Effect</span><span></span></div>
+                    <div id="offense" class="repeat-list table-list"></div>
+                    <div class="list-actions">
+                        <button type="button" class="btn small" data-add="offense">+ Add attack</button>
+                    </div>
                 </fieldset>
 
                 <fieldset>
                     <legend>Complications</legend>
-                    <textarea name="complications" rows="2" placeholder="Motivation: Justice. Secret identity…"></textarea>
+                    <div id="complications" class="repeat-list"></div>
+                    <div class="list-actions">
+                        <button type="button" class="btn small" data-add="complications">+ Add complication</button>
+                        <button type="button" class="btn small" data-pick="complications">+ From the book</button>
+                    </div>
                 </fieldset>
 
                 <fieldset>
@@ -200,6 +278,20 @@
         <div class="ref-body" id="ref-body"></div>
     </dialog>
 
+    <!-- ================================================================
+         "FROM THE BOOK" PICKER. Same kind of modal as the Checks popup;
+         app.js fills #pick-body with one button per sample for whichever
+         section asked for it.
+         ================================================================ -->
+    <dialog id="pick-dialog" class="ref pick" aria-labelledby="pick-title">
+        <div class="ref-head">
+            <h2 id="pick-title">From the book</h2>
+            <input id="pick-search" type="search" placeholder="Filter…" autocomplete="off" aria-label="Filter the list">
+            <button type="button" class="btn small" id="pick-close">Close</button>
+        </div>
+        <div class="ref-body" id="pick-body"></div>
+    </dialog>
+
     <!-- Small info card shown on hover / long press over a condition chip,
          ability or defense box, or list badge. One element, moved and refilled
          by app.js as needed. role="tooltip" tells screen readers what it is. -->
@@ -209,6 +301,7 @@
          so it must come first. Both are loaded last so every element above
          exists by the time they run. -->
     <script src="reference.js"></script>
+    <script src="samples.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

@@ -12,6 +12,7 @@ dependencies. Runs in any browser and installs to a phone's home screen.
 | `style.css` | All styling. Colours live in CSS variables at the top. Mobile-first with a two-column layout from 820px. |
 | `app.js` | All behaviour: data model, saving to localStorage, drawing the list and form, export/import of `.json`, the rules popup. |
 | `reference.js` | Data only: the sections and entries shown in the Checks popup. Edit rules text here. |
+| `samples.js` | Data only: the skills, advantages, powers and complications offered by the "+ From the book" buttons. |
 | `sw.js` | Service worker. Caches the files so the app opens offline. |
 | `manifest.json` | Tells the OS how to install the app (name, icons, colours). See below. |
 | `icon.svg` | The app icon as vector art. |
@@ -41,11 +42,13 @@ Each block looks like this:
   "conditions": ["Dazed", "Unaware"],
   "conditionDetails": { "Unaware": "Visual, Tactile" },
   "bruises": 2,
-  "powers": [{ "name": "Flight 6", "desc": "Wings; Subtle" }],
-  "skills": "Perception 6 (+8)",
-  "advantages": "",
-  "offense": "",
-  "complications": "",
+  "pp": { "earned": 3, "other": 0 },
+  "powers": [{ "name": "Flight", "rank": 6, "desc": "Wings; Subtle", "cost": 12, "perRank": 2 }],
+  "skills": [{ "name": "Perception", "ability": "AWE", "ranks": 6 }],
+  "advantages": [{ "name": "Evasion", "rank": 2, "note": "" }],
+  "offense": [{ "name": "Unarmed", "bonus": 10, "range": "Close", "effect": "Damage 2" }],
+  "complications": [{ "name": "Motivation: Justice", "note": "" }],
+  "equipment": [{ "name": "Pistol", "cost": 8, "note": "Ranged Damage 3" }],
   "notes": "",
   "updated": 1760702400000
 }
@@ -95,6 +98,24 @@ served over HTTPS. GitHub Pages is a free way to do that.
   clamped, and a field left empty becomes 0. On touch screens a signed field
   shows a +/- button while you are typing in it; one tap flips the sign.
   Phone keypads often lack a minus key, which is what this is for.
+- **Text boxes** (skills, notes, power descriptions...) size themselves to
+  their text; see `fitTextarea` in `app.js`. Nothing about their size is saved.
+- **Lists:** skills, advantages, offense, complications and powers are arrays
+  of small objects (shapes above). A save from before they were lists holds
+  free text, which is split into entries on load as best it can be.
+- **Power points:** the total is PL x 15 plus `pp.earned`, the points the GM
+  has awarded (an older save's `pp.total` override above the base becomes
+  `earned` on load). Everything but `earned` and `other` is computed (see
+  `computePP` in `app.js`): abilities and defenses from the stat boxes,
+  skills (1 per 2 ranks), advantages (1 per rank) and powers (each power's
+  `cost`) from their lists. Old lump sums under `pp.powers`, `pp.skills` or
+  `pp.advantages` are moved into `other` on load when the list gives nothing.
+- **Equipment:** the Equipment section is shown only while an advantage whose
+  name starts with "Equipment" is in the list; its points are that
+  advantage's rank x 5 (see `computeEP` in `app.js`).
+- **From the book:** the picker lists come from `samples.js`. A power picked
+  from the book carries `perRank`, so its cost follows its rank until you
+  edit the cost by hand.
 - **Add a condition / ability / defense:** add the string to the matching
   array at the top of `app.js`. The form and badges update themselves.
   If the new condition makes another redundant, add it to `SUPERSEDES`; if it

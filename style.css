@@ -150,7 +150,8 @@ textarea {
     background: var(--surface);
     font: 16px/1.4 var(--font-body);
     color: var(--text);
-    resize: vertical;        /* drag handle up/down only */
+    resize: none;            /* sized to its text by app.js (fitTextarea), so no drag handle... */
+    overflow: hidden;        /* ...and no inner scrollbar */
     min-height: 2.5em;
 }
 
@@ -347,6 +348,14 @@ button, .chip, .stat, .block-item, .badge, .tab { -webkit-tap-highlight-color: t
 .editor-head { display: flex; flex-wrap: wrap; gap: var(--gap); align-items: center; margin-bottom: var(--gap); }
 .name-input { font-size: 1.8rem; flex: 1; }
 .pl-label { display: flex; align-items: center; gap: 6px; font-size: 1.2rem; font-weight: 700; white-space: nowrap; }
+
+/* Phones in portrait: the name gets a whole line to itself (flex-basis
+ * 100% forces the wrap), with PL on the left and Checks pushed to the right
+ * on the line below. */
+@media (max-width: 600px) {
+    .name-input { flex: 1 1 100%; }
+    #btn-checks { margin-left: auto; }
+}
 .pl-label input { width: 64px; text-align: center; }
 
 /* Each section of the form: a rounded navy-bordered panel like on the sheet.
@@ -415,6 +424,81 @@ legend { font-size: 1.25rem; font-weight: 700; padding: 0 6px; color: var(--mute
     .stat:focus-within .sign, .inline-field:focus-within .sign { display: inline-flex; }
 }
 
+/* A hidden fieldset must stay hidden even though fieldsets have their own display. */
+fieldset[hidden] { display: none; }
+
+/* Power points section. Summary row on top (total, spent, left), then a
+ * two-column grid of categories that drops to one column on narrow phones. */
+.pp-summary { display: flex; flex-wrap: wrap; gap: 4px 20px; align-items: flex-end; margin-bottom: 10px; }
+.pp-earned input { width: 76px; }
+.pp-stat small { font-size: 0.85rem; font-weight: 400; color: var(--muted); letter-spacing: 0; }
+/* Base and Total are reference figures, so they are quieter: grey and a
+ * step smaller, leaving Spent and Left as the numbers that stand out. */
+.pp-stat.quiet { color: var(--muted); font-size: 1.05rem; }
+.pp-stat.quiet output { font-size: 1.25rem; color: var(--muted); font-weight: 600; }
+.pp-stat { display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; font-family: var(--font-display); text-transform: uppercase; font-size: 1.2rem; font-weight: 700; }
+.pp-stat output { font-size: 1.6rem; color: var(--value); line-height: 1; }
+.pp-stat output.over { color: var(--danger); }   /* overspent */
+.pp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
+@media (max-width: 480px) { .pp-grid { grid-template-columns: 1fr; } }
+.pp-row {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    padding: 4px 8px; border-radius: 6px; background: var(--surface-2);
+    font-family: var(--font-display); text-transform: uppercase; font-weight: 700; font-size: 1.05rem; line-height: 1.1;
+}
+.pp-row small { display: block; font-family: var(--font-body); text-transform: none; font-weight: 400; font-size: 0.78rem; color: var(--muted); letter-spacing: 0; }
+.pp-row input { width: 76px; text-align: center; flex-shrink: 0; }
+
+/* List sections (skills, advantages, offense, complications). One row per
+ * entry; the fields wrap onto a second line on narrow screens, and a note
+ * box, when a row has one, always takes a full line. */
+.list-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.list-row {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    padding: 8px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-2);
+}
+.list-row .grow { flex: 1 1 150px; min-width: 0; }
+.list-row input[type="number"] { width: 64px; text-align: center; }
+.list-row .lbl { display: inline-flex; align-items: center; gap: 4px; font-size: 0.95rem; font-weight: 700; white-space: nowrap; }
+.list-row select {
+    padding: 6px 8px; border: 1px solid var(--border-soft); border-radius: 6px; background: var(--surface);
+    font-family: var(--font-display); font-size: 1.05rem; font-weight: 700; color: var(--value); text-transform: uppercase;
+}
+.list-row .total { min-width: 44px; text-align: center; font-family: var(--font-display); font-size: 1.3rem; font-weight: 700; color: var(--value); }
+.list-row .note { flex: 1 1 100%; font-family: var(--font-display); font-size: 1.05rem; line-height: 1.25; }
+.list-row .icon { margin-left: auto; }
+
+/* Skills and Advantages as tables: a heading line, then one slim line per
+ * entry with the same grid columns, divided by hairlines instead of boxes. */
+.table-list { gap: 0; }
+.table-head, .table-list .list-row { display: grid; align-items: center; gap: 6px; }
+.table-head {
+    font-family: var(--font-display); text-transform: uppercase; font-size: 0.85rem; letter-spacing: 0.04em; color: var(--muted);
+    padding: 0 0 3px; border-bottom: 1px solid var(--border);
+}
+.table-list .list-row { padding: 4px 0; border: 0; border-radius: 0; background: transparent; border-bottom: 1px solid var(--border-soft); }
+.table-list .list-row input[type="text"] { min-width: 0; padding: 4px 8px; }
+.table-list .list-row input[type="number"] { width: auto; padding: 4px; }
+.table-list .list-row select { padding: 4px 6px; }
+.table-list .list-row .icon { margin-left: 0; min-height: 30px; min-width: 30px; padding: 2px; }
+.table-list .list-row .note { font-family: var(--font-body); font-size: 0.95rem; color: var(--text); }
+/*                      skill name | ability | ranks | total | x   */
+.skill-row     { grid-template-columns: minmax(0, 1fr) 84px 60px 48px 32px; }
+/*                      advantage  | rank | note        | x        */
+.advantage-row, .equipment-row { grid-template-columns: minmax(0, 1fr) 60px minmax(0, 1.3fr) 32px; }
+/*                      attack     | bonus | range | effect      | x   */
+.offense-row   { grid-template-columns: minmax(0, 1fr) 60px 112px minmax(0, 1.1fr) 32px; }
+@media (max-width: 480px) {
+    /* Phones: the note / effect drops onto its own line under the name. */
+    .advantage-row, .equipment-row { grid-template-columns: minmax(0, 1fr) 60px 32px; }
+    .offense-row   { grid-template-columns: minmax(0, 1fr) 60px 104px 32px; }
+    .table-head .note { display: none; }
+    .advantage-row .note, .offense-row .note, .equipment-row .note { grid-column: 1 / -1; }
+    .table-list .advantage-row .icon, .table-list .equipment-row .icon { grid-column: 3; grid-row: 1; }
+    .table-list .offense-row .icon { grid-column: 4; grid-row: 1; }
+}
+.pp-row output { min-width: 48px; text-align: center; font-size: 1.4rem; color: var(--value); }
+
 /* Condition chips. Each is a <label> that wraps a hidden checkbox; clicking
  * anywhere on the label toggles the box. app.js adds .on when it's checked. */
 .conditions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -457,16 +541,17 @@ legend { font-size: 1.25rem; font-weight: 700; padding: 0 6px; color: var(--mute
 /* Smaller chips for the sense toggles. */
 .chip.mini { padding: 2px 10px; min-height: 30px; font-size: 1rem; border-width: 1px; }
 
-/* Power rows. Generated by renderPowers() in app.js. Layout is a 2-column
- * grid: inputs stacked on the left, the ✕ button spanning both rows on the right.
+/* Power rows. Generated by renderPowers() in app.js. Layout is a 3-column
+ * grid: name and cost on the first row, the description under both, and the
+ * ✕ button spanning both rows on the right.
  *
- *   | power-name  | ✕ |
- *   | power-desc  |   |
+ *   | power-name  | PP [cost] | ✕ |
+ *   | power-desc              |   |
  */
 .repeat-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
 .power-row {
     display: grid;
-    grid-template-columns: 1fr auto;   /* "auto" = just as wide as the button */
+    grid-template-columns: 1fr auto auto auto;   /* name | rank | PP cost | remove button; "auto" = as wide as the content */
     gap: 6px;
     padding: 8px;
     border: 1px solid var(--border-soft);
@@ -474,8 +559,21 @@ legend { font-size: 1.25rem; font-weight: 700; padding: 0 6px; color: var(--mute
     background: var(--surface-2);
 }
 .power-row .power-name { grid-column: 1; }
-.power-row .power-remove { grid-column: 2; grid-row: 1 / span 2; align-self: start; }
-.power-row .power-desc { grid-column: 1; }
+.power-row .power-rank, .power-row .power-cost { display: inline-flex; align-items: center; gap: 4px; font-size: 1rem; font-weight: 700; white-space: nowrap; }
+.power-row .power-rank { grid-column: 2; }
+.power-row .power-cost { grid-column: 3; }
+.power-row .power-rank input, .power-row .power-cost input { width: 60px; text-align: center; }
+.power-row .power-remove { grid-column: 4; grid-row: 1 / span 2; align-self: start; }
+.power-row .power-desc { grid-column: 1 / 4; font-family: var(--font-display); font-size: 1.1rem; line-height: 1.25; }   /* same font as the name; spans name, rank and cost */
+@media (max-width: 480px) {
+    /* Phones: name on its own line, rank and cost underneath. */
+    .power-row { grid-template-columns: auto auto 1fr auto; }
+    .power-row .power-name { grid-column: 1 / 4; }
+    .power-row .power-rank { grid-column: 1; grid-row: 2; }
+    .power-row .power-cost { grid-column: 2; grid-row: 2; }
+    .power-row .power-remove { grid-column: 4; grid-row: 1; }
+    .power-row .power-desc { grid-column: 1 / 5; grid-row: 3; }
+}
 
 /* Footer of the editor: status text, a flexible spacer, then the buttons.
  * The spacer's flex: 1 pushes everything after it to the right. */
@@ -597,6 +695,15 @@ dialog.ref::backdrop { background: rgba(8, 20, 48, 0.65); }
 .ref-entry table.wide td:first-child { white-space: normal; min-width: 90px; }   /* use names may wrap */
 .ref-entry table.wide td:nth-child(2) { color: var(--value); font-weight: 600; }   /* the DC / opposed-by column in sheet blue */
 .ref-empty { color: var(--muted); padding: 16px 0; }
+
+/* The "From the book" picker: one button per sample. */
+.pick-item {
+    display: block; width: 100%; text-align: left; margin: 6px 0; padding: 8px 10px;
+    border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-2); color: var(--text); cursor: pointer;
+}
+.pick-item:hover, .pick-item:focus-visible { border-color: var(--value); }
+.pick-name { display: block; font-family: var(--font-display); text-transform: uppercase; font-size: 1.15rem; font-weight: 700; line-height: 1.1; }
+.pick-desc { display: block; font-size: 0.9rem; color: var(--muted); margin-top: 2px; font-family: var(--font-body); text-transform: none; letter-spacing: 0; }   /* plain prose, not the button's uppercase */
 
 /* Brief highlight on the entry an info card jumped to. */
 .ref-entry.flash { animation: ref-flash 1.2s ease-out; }
