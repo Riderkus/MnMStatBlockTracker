@@ -25,7 +25,7 @@
  * ========================================================================== */
 
 // Name of the cache. Bump the number whenever any file in APP_SHELL changes.
-const CACHE_VERSION = 'statblocks-v68';
+const CACHE_VERSION = 'statblocks-v69';
 
 // The files needed to draw the app with no network at all.
 // './' is the folder itself, which servers map to index.html.

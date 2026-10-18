@@ -605,7 +605,7 @@
      * tap, get -5. On 0 there is nothing to flip, so nothing happens.
      */
     const signButton = (input) => el('button', {
-        type: 'button', class: 'btn sign', text: '\u00b1', title: 'Flip the sign',
+        type: 'button', class: 'btn sign', text: '\u00b1',
         'aria-label': 'Flip the sign of ' + (input.name || input.dataset.key),
         // Don't take focus from the field on tap: losing focus would hide this
         // very button and drop the keyboard. The click still fires. That same
@@ -654,7 +654,7 @@
             cb.disabled = Boolean(by);
             chip.classList.toggle('on', cb.checked);
             chip.classList.toggle('superseded', Boolean(by));
-            chip.title = by ? `Covered by ${by}` : '';
+            // (no title attribute: the chip's info card would be covered by the browser's own tooltip)
             chip.querySelector('.chip-by').textContent = by ? `← ${by}` : '';
         }
         renderConditionDetails(block);
@@ -805,7 +805,7 @@
                     // the list is an overspend, shown as a small red badge.
                     el('div', { class: 'meta' },
                         document.createTextNode(`PL ${b.pl}`),
-                        ...(computePP(b).left < 0 ? [el('span', { class: 'badge over', text: '!', title: `${-computePP(b).left} power points over` })] : []),
+                        ...(computePP(b).left < 0 ? [el('span', { class: 'badge over', text: '!', 'data-over': `${-computePP(b).left} power points over`, 'aria-label': `${-computePP(b).left} power points over` })] : []),
                     ),
                 ),
                 badges,
@@ -870,10 +870,10 @@
                 class: 'power-name', type: 'text', placeholder: 'Power name (e.g. Flight)', value: p.name,
                 oninput: (e) => { p.name = e.target.value; touch(block); },
             }),
-            el('label', { class: 'power-rank', title: 'Rank' }, document.createTextNode('Rank'), rank),
-            el('label', { class: 'power-cost', title: 'Power points spent on this power' }, document.createTextNode('PP'), cost),
+            el('label', { class: 'power-rank' }, document.createTextNode('Rank'), rank),
+            el('label', { class: 'power-cost' }, document.createTextNode('PP'), cost),
             el('button', {
-                class: 'btn small icon power-remove', type: 'button', title: 'Remove power', text: '\u2715',
+                class: 'btn small icon power-remove', type: 'button', 'aria-label': 'Remove power', text: '\u2715',
                 // Find the power by identity (not a stored index, which would go
                 // stale once another row is removed), drop it, remove just this row.
                 onclick: () => {
@@ -1405,7 +1405,7 @@
         const stat = target.querySelector?.('[data-key]');
         if (stat) return [stat.dataset.group === 'abilities' ? 'ability' : 'defense', stat.dataset.key];
         if (c.contains('badge')) {
-            if (c.contains('over')) return ['over', target.title];
+            if (c.contains('over')) return ['over', target.dataset.over];
             const name = target.textContent.replace(/\s*\(.*$/, '').trim();   // "Unaware (Visual)" -> "Unaware"
             return name.startsWith('Bruised') ? ['bruised', 'Bruised'] : ['condition', name];
         }
@@ -1646,7 +1646,7 @@
 
     /** The remove button every row ends with: drop the entry, remove the row, refresh totals. */
     const removeButton = (block, list, entry, row) => el('button', {
-        class: 'btn small icon', type: 'button', title: 'Remove', text: '\u2715',
+        class: 'btn small icon', type: 'button', 'aria-label': 'Remove', text: '\u2715',
         onclick: () => {
             const i = list.indexOf(entry);
             if (i >= 0) list.splice(i, 1);
@@ -1664,7 +1664,7 @@
     // Skills and advantages are drawn as table lines: the column headings are
     // in index.html (.table-head) and the row's grid columns in style.css.
     const skillRow = (block, s) => {
-        const total = el('output', { class: 'total', title: 'Ranks + ability rank' });
+        const total = el('output', { class: 'total' });
         const row = el('div', { class: 'list-row skill-row' },
             el('input', { type: 'text', placeholder: 'Skill (e.g. Expertise: Science)', value: s.name, oninput: (e) => { s.name = e.target.value; touch(block); } }),
             selectField(SKILL_ABILITIES, s.ability, (v) => { s.ability = v; touch(block); row._refresh(block); }, '\u2014'),
