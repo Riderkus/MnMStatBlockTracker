@@ -54,6 +54,10 @@
         <h1>Stat Block Tracker</h1>
         <div class="topbar-actions">
             <button id="btn-new" class="btn primary" type="button">+ New</button>
+            <!-- Save writes to the SAME .json file every time (first press picks
+                 the file). Needs the File System Access API, so app.js only
+                 shows it where that exists: Chrome and Edge on a PC. -->
+            <button id="btn-save" class="btn" type="button" hidden title="Save to the same .json file every time">Save</button>
             <button id="btn-export" class="btn" type="button" title="Download all blocks as .json">Export</button>
             <button id="btn-import" class="btn" type="button" title="Load blocks from a .json file">Import</button>
 
@@ -73,7 +77,19 @@
 
         <!-- LEFT COLUMN: the list of saved blocks. -->
         <aside class="sidebar" id="sidebar">
-            <input id="search" class="search" type="search" placeholder="Search by name…" autocomplete="off">
+            <!-- Search box and the sort order side by side. The options'
+                 values are the keys of SORTS in app.js; the choice is kept
+                 in localStorage so it survives a reload. -->
+            <div class="list-tools">
+                <input id="search" class="search" type="search" placeholder="Search by name…" autocomplete="off">
+                <select id="sort" class="sort" aria-label="Sort the list by">
+                    <option value="name">Name</option>
+                    <option value="type">Kind</option>
+                    <option value="pl">Power level</option>
+                    <option value="recent">Last edited</option>
+                    <option value="conditions">In trouble</option>
+                </select>
+            </div>
 
             <!-- app.js fills this <ul> with one <li class="block-item"> per block. -->
             <ul id="block-list" class="block-list"></ul>
@@ -100,9 +116,44 @@
                 <div class="editor-head">
                     <input id="f-name" name="name" class="name-input" type="text" placeholder="Character name" required>
                     <label class="pl-label">PL <input id="f-pl" name="pl" type="number" min="0" max="999" step="1" inputmode="numeric" value="10"></label>
-                    <!-- Opens the rules reference popup over the stat block. -->
-                    <button type="button" class="btn" id="btn-checks" title="Rules reference: checks, conditions, advantages, powers, complications">Reference</button>
+                    <!-- What kind of block this is. app.js shows and hides the
+                         sections below to match: every element with a
+                         data-types="" attribute lists the kinds that show it.
+                           sheet  = full character sheet (identity, hero points, background + everything)
+                           block  = the ordinary stat block (everything without data-types)
+                           minion = goons: abilities, defenses, conditions, offense and a traits box -->
+                    <select id="f-type" name="type" class="type-select" aria-label="Kind of stat block">
+                        <option value="sheet">Sheet</option>
+                        <option value="block">Stat block</option>
+                        <option value="minion">Minion</option>
+                    </select>
                 </div>
+
+                <!-- CHARACTER SHEETS ONLY: the header of the book's hero sheet.
+                     data-text="identity.realName" tells app.js to store the
+                     field as block.identity.realName (object.key). -->
+                <fieldset data-types="sheet">
+                    <legend>Identity</legend>
+                    <div class="id-grid">
+                        <label class="id-field wide">Real name <input type="text" data-text="identity.realName" placeholder="Jack Cooper"></label>
+                        <label class="id-field">Identity
+                            <select data-text="identity.status"><option value="">—</option><option value="Secret">Secret</option><option value="Public">Public</option></select>
+                        </label>
+                        <label class="id-field">Player <input type="text" data-text="identity.player"></label>
+                        <label class="id-field">Occupation <input type="text" data-text="identity.occupation"></label>
+                        <label class="id-field">Group affiliation <input type="text" data-text="identity.group"></label>
+                        <label class="id-field">Base of operations <input type="text" data-text="identity.base"></label>
+                    </div>
+                    <!-- The short physical details: a tighter grid so they share a row. -->
+                    <div class="id-grid short">
+                        <label class="id-field">Gender <input type="text" data-text="identity.gender"></label>
+                        <label class="id-field">Age <input type="text" data-text="identity.age"></label>
+                        <label class="id-field">Height <input type="text" data-text="identity.height"></label>
+                        <label class="id-field">Weight <input type="text" data-text="identity.weight"></label>
+                        <label class="id-field">Eyes <input type="text" data-text="identity.eyes"></label>
+                        <label class="id-field">Hair <input type="text" data-text="identity.hair"></label>
+                    </div>
+                </fieldset>
 
                 <!-- <fieldset> + <legend> is the semantic way to group related
                      inputs under a heading; style.css draws the box. -->
@@ -114,7 +165,9 @@
 
                 <fieldset>
                     <legend>Defenses</legend>
-                    <!-- Filled by app.js from the DEFENSES array. -->
+                    <!-- Filled by app.js from the DEFENSES array. Shown with a
+                         sign ("+9") because a defense is a bonus: +10 as the
+                         target for attacks, or added to a d20 resistance check. -->
                     <div class="grid grid-5" id="defenses"></div>
                     <!-- Initiative can be negative; app.js adds a +/- button after it that shows
                          while the field has the cursor on touch screens. -->
@@ -125,7 +178,7 @@
                     <label class="inline-field">Initiative <input id="f-initiative" name="initiative" type="text" inputmode="numeric" pattern="[+\-]?[0-9]*" data-plus="1" value="+0"></label>
                 </fieldset>
 
-                <fieldset>
+                <fieldset data-types="sheet block">
                     <legend>Power points</legend>
                     <!-- Totals. Earned is what the GM has awarded and is the one
                          field you type into; Base (power level x 15), Total, Spent
@@ -162,13 +215,17 @@
                     <div class="condition-details" id="condition-details" hidden></div>
                     <!-- Bruised stacks in M&M, so it is a counter, not a chip. -->
                     <div class="conditions-foot">
-                        <label class="inline-field">Bruises <input id="f-bruises" name="bruises" type="number" min="0" max="999" step="1" inputmode="numeric" value="0"></label>
-                        <!-- End of the fight: unticks every chip, clears details and bruises. -->
+                        <div class="foot-fields">
+                            <label class="inline-field">Bruises <input id="f-bruises" name="bruises" type="number" min="0" max="999" step="1" inputmode="numeric" value="0"></label>
+                            <!-- Character sheets only: the hero points in hand this session. -->
+                            <label class="inline-field" data-types="sheet">Hero points <input id="f-hero" name="heroPoints" type="number" min="0" max="999" step="1" inputmode="numeric" value="1"></label>
+                        </div>
+                        <!-- End of the fight: unticks every chip, clears details and bruises (hero points stay). -->
                         <button type="button" class="btn small" id="btn-clear-conditions">Clear conditions</button>
                     </div>
                 </fieldset>
 
-                <fieldset>
+                <fieldset data-types="sheet block">
                     <legend>Powers</legend>
                     <!-- Filled by app.js with one row per power (name + PP cost + description + remove). -->
                     <div id="powers" class="repeat-list"></div>
@@ -184,7 +241,7 @@
                      entry, filled by app.js. "+ Add" makes a blank row; "+ From
                      the book" opens the picker (the dialog at the bottom of the
                      page) over the samples in samples.js. -->
-                <fieldset>
+                <fieldset data-types="sheet block">
                     <legend>Skills</legend>
                     <!-- Column headings; the rows app.js adds use the same grid. -->
                     <div class="table-head skill-row"><span>Skill</span><span>Ability</span><span>Ranks</span><span>Total</span><span></span></div>
@@ -195,7 +252,7 @@
                     </div>
                 </fieldset>
 
-                <fieldset>
+                <fieldset data-types="sheet block">
                     <legend>Advantages</legend>
                     <div class="table-head advantage-row"><span>Advantage</span><span>Rank</span><span class="note">Note</span><span></span></div>
                     <div id="advantages" class="repeat-list table-list"></div>
@@ -208,7 +265,7 @@
                 <!-- Only shown while an advantage named "Equipment" is in the
                      list above (app.js toggles the hidden attribute). Tracks
                      equipment points: 5 per rank of that advantage. -->
-                <fieldset id="equipment-section" hidden>
+                <fieldset id="equipment-section" data-types="sheet block" hidden>
                     <legend>Equipment</legend>
                     <div class="pp-summary">
                         <div class="pp-stat quiet">Points <small>(rank <span id="ep-rank">0</span> &times; 5)</small> <output id="ep-total">0</output></div>
@@ -224,14 +281,18 @@
 
                 <fieldset>
                     <legend>Offense</legend>
-                    <div class="table-head offense-row"><span>Attack</span><span>Bonus</span><span>Range</span><span class="note">Effect</span><span></span></div>
+                    <!-- Damage is the damage rank; Resisted by is the defense the
+                         target rolls against it (the play view shows the DC:
+                         Toughness 15 + rank, others 10 + rank). Effect is optional
+                         extra text: an affliction, a modifier, anything else. -->
+                    <div class="table-head offense-row"><span>Attack</span><span>Bonus</span><span>Range</span><span>Damage</span><span>Resisted by</span><span class="note">Effect</span><span></span></div>
                     <div id="offense" class="repeat-list table-list"></div>
                     <div class="list-actions">
                         <button type="button" class="btn small" data-add="offense">+ Add attack</button>
                     </div>
                 </fieldset>
 
-                <fieldset>
+                <fieldset data-types="sheet block">
                     <legend>Complications</legend>
                     <div id="complications" class="repeat-list"></div>
                     <div class="list-actions">
@@ -240,8 +301,20 @@
                     </div>
                 </fieldset>
 
+                <!-- CHARACTER SHEETS ONLY: the prose parts of the hero sheet. -->
+                <fieldset data-types="sheet">
+                    <legend>Background</legend>
+                    <label class="text-field">Appearance <textarea rows="2" data-text="background.appearance" placeholder="Costume, build, what people notice first…"></textarea></label>
+                    <label class="text-field">Personality <textarea rows="2" data-text="background.personality" placeholder="How the hero acts and what drives them…"></textarea></label>
+                    <label class="text-field">History <textarea rows="2" data-text="background.history" placeholder="Origin and what has happened since…"></textarea></label>
+                </fieldset>
+
                 <fieldset>
-                    <legend>Notes</legend>
+                    <!-- For minions app.js renames this "Traits & notes": with the
+                         Skills, Advantages and Powers sections hidden, this one box
+                         holds all of that in a line or two. -->
+                    <legend id="notes-legend">Notes</legend>
+                    <p class="hint" data-types="minion">Minion rules: a failed resistance check gives the worst degree (a failed Toughness check incapacitates), non-minions may attack them with routine checks, and they cannot score critical hits against non-minions. (p. 245)</p>
                     <textarea name="notes" rows="3" placeholder="Anything else…"></textarea>
                 </fieldset>
 
@@ -258,7 +331,58 @@
                 </div>
             </form>
         </section>
+
+        <!-- ============================================================
+             PLAY VIEW. The same block as a one-screen sheet for the table,
+             in the spirit of D&D Beyond's character sheet: big read-only
+             numbers on top, the things that change during play (bruises,
+             hero points, conditions) editable, and tabs for the long lists.
+             Shown instead of the editor while the view mode is "play";
+             app.js fills every part from the block (renderPlay).
+             ============================================================ -->
+        <section class="play" id="play" hidden>
+            <div class="play-head">
+                <div class="play-title">
+                    <h2 id="play-name"></h2>
+                    <div class="play-sub" id="play-sub"></div>
+                </div>
+            </div>
+            <!-- Abilities: eight boxes. Defenses: five boxes plus Initiative. -->
+            <div class="play-abilities" id="play-abilities"></div>
+            <div class="play-defenses" id="play-defenses"></div>
+            <!-- What changes during play: counters with - / + and the condition pills. -->
+            <div class="play-state">
+                <div class="play-counters" id="play-counters"></div>
+                <div class="play-conds" id="play-conds"></div>
+            </div>
+            <nav class="play-tabs" id="play-tabs" aria-label="Sections"></nav>
+            <div class="play-body" id="play-body"></div>
+        </section>
     </main>
+
+    <!-- "+ Condition" in the play view: one button per condition that can be
+         added right now, with the first line of its rules text. -->
+    <dialog id="cond-dialog" class="ref pick type-pick" aria-labelledby="cond-title">
+        <div class="ref-head">
+            <h2 id="cond-title">Add a condition</h2>
+            <input id="cond-search" type="search" placeholder="Filter…" autocomplete="off" aria-label="Filter the conditions">
+            <button type="button" class="btn small" id="cond-close">Cancel</button>
+        </div>
+        <div class="ref-body" id="cond-body"></div>
+    </dialog>
+
+    <!-- The specifier of one condition in the play view (which senses for
+         Unaware, which abilities for Debilitated, free text for Impaired and
+         the like). Opens when such a condition is added there, and from the
+         pencil on its pill. app.js fills #detail-body with the same control
+         the editor shows under its chips. -->
+    <dialog id="detail-dialog" class="ref pick type-pick" aria-labelledby="detail-title">
+        <div class="ref-head">
+            <h2 id="detail-title">Condition</h2>
+            <button type="button" class="btn small" id="detail-close">Done</button>
+        </div>
+        <div class="ref-body" id="detail-body"></div>
+    </dialog>
 
     <!-- ================================================================
          RULES REFERENCE POPUP (the "Reference" button). <dialog> is the browser's built-in modal:
@@ -291,6 +415,42 @@
         </div>
         <div class="ref-body" id="pick-body"></div>
     </dialog>
+
+    <!-- ================================================================
+         "+ NEW" CHOOSER. Asks which kind of block to make; app.js creates
+         the block when one of the three buttons is pressed.
+         ================================================================ -->
+    <dialog id="type-dialog" class="ref pick type-pick" aria-labelledby="type-title">
+        <div class="ref-head">
+            <h2 id="type-title">New stat block</h2>
+            <button type="button" class="btn small" id="type-close">Cancel</button>
+        </div>
+        <div class="ref-body">
+            <button type="button" class="pick-item" data-type="sheet">
+                <span class="pick-name">Character sheet</span>
+                <span class="pick-desc">The full hero sheet for player characters and major villains: identity, hero points and background on top of everything a stat block has.</span>
+            </button>
+            <button type="button" class="pick-item" data-type="block">
+                <span class="pick-name">Stat block</span>
+                <span class="pick-desc">Abilities, defenses, power points, conditions, powers, skills, advantages, equipment, offense, complications and notes. The standard block for most characters.</span>
+            </button>
+            <button type="button" class="pick-item" data-type="minion">
+                <span class="pick-name">Minion</span>
+                <span class="pick-desc">A short block for goons and simple enemies: abilities, defenses, conditions, offense and a traits box. Minions follow the special rules on p. 245.</span>
+            </button>
+        </div>
+    </dialog>
+
+    <!-- ================================================================
+         FLOATING BAR. Pinned to the bottom-right corner of the screen while
+         a block is open, in both views, so these two are always within
+         reach: the rules reference, and the switch between the editor and
+         the play view (app.js relabels it "Play" or "Edit").
+         ================================================================ -->
+    <div class="float-bar" id="float-bar" hidden>
+        <button type="button" class="btn" id="btn-checks" title="Rules reference: checks, conditions, advantages, powers, complications">Reference</button>
+        <button type="button" class="btn primary" id="btn-play" title="Switch between the editor and the play view">Play</button>
+    </div>
 
     <!-- Small info card shown on hover / long press over a condition chip,
          ability or defense box, or list badge. One element, moved and refilled

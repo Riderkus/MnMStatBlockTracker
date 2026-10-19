@@ -57,7 +57,30 @@
         bruises: { min: 0, max: 999 },
         pl: { min: 0, max: 999 },
         pp: { min: 0, max: 9999 },   // power point fields
+        heroPoints: { min: 0, max: 999 },
     };
+
+    // The three kinds of block. The key is what is saved in block.type; the
+    // value is the full name, as the "+ New" chooser spells it out (the
+    // dropdown in the editor uses shorter labels, see index.html).
+    // index.html marks each section with data-types="sheet block"
+    // and so on, and applyType() below shows or hides them to match.
+    //   sheet  - full character sheet: identity, hero points, background + all
+    //   block  - the ordinary stat block (the default)
+    //   minion - goons: abilities, defenses, conditions, offense, a traits box
+    const TYPES = { sheet: 'Character sheet', block: 'Stat block', minion: 'Minion' };
+    // Short tag shown before the PL in the sidebar. The ordinary block is the
+    // baseline, so it gets no tag.
+    const TYPE_TAG = { sheet: 'Sheet', minion: 'Minion' };
+    /** Minions have no power point section, so there is nothing to overspend. */
+    const tracksPP = (block) => block.type !== 'minion';
+
+    // The text fields of the two character-sheet-only sections, with their
+    // defaults. Also used by migrate() to fill gaps in older saves.
+    const blankIdentity = () => ({ realName: '', status: '', player: '', occupation: '', group: '', base: '', gender: '', age: '', height: '', weight: '', eyes: '', hair: '' });
+    const blankBackground = () => ({ appearance: '', personality: '', history: '' });
+    /** Copies the keys of `defaults` out of `src` as strings; anything missing gets the default. */
+    const textObject = (defaults, src) => Object.fromEntries(Object.keys(defaults).map((k) => [k, String(src?.[k] ?? defaults[k])]));
 
     // POWER POINTS (Hero's Handbook: p. 24 starting points, p. 107 abilities,
     // p. 110 defenses, p. 113 skills, p. 130 advantages).
@@ -69,6 +92,10 @@
     //  and powers are summed from their lists)
     const SKILL_ABILITIES = ['STR', 'STA', 'AGL', 'DEX', 'FGT', 'INT', 'AWE', 'PRE'];
     const OFFENSE_RANGES = ['Close', 'Ranged', 'Perception'];
+    // What an attack's damage is resisted with. Damage is a Toughness check
+    // against DC 15 + rank; another defense makes it DC 10 + rank (p. 246).
+    const RESIST_TYPES = ['Toughness', 'Fortitude', 'Will', 'Dodge'];
+    const resistDC = (o) => (o.resist ? (o.resist === 'Toughness' ? 15 : 10) + (o.damage || 0) : null);
     const EP_PER_RANK = 5;   // the Equipment advantage: 5 equipment points per rank (p. 130)
 
     /**
@@ -344,6 +371,17 @@
         Transformed: { label: 'Transformed', placeholder: 'into what, e.g. a stone statue' },
     };
 
+    // What each sense type covers (Hero's Handbook, Sense Types box, p. 176),
+    // for the info cards on the Unaware options.
+    const SENSE_INFO = {
+        Visual: 'Visual senses: normal sight, darkvision, infravision, low-light vision, microscopic vision, ultravision, X-ray vision. Visually unaware (blind): everything has full visual concealment from you. (p. 176)',
+        Auditory: 'Auditory senses: normal hearing, ultrasonic hearing, sonar. Auditorily unaware (deaf): everything has total auditory concealment from you. (p. 176)',
+        Olfactory: 'Olfactory senses: normal smell and taste, scent. Olfactorily unaware: nothing can be smelled or tasted. (p. 176)',
+        Tactile: 'Tactile senses: normal touch, tremorsense. Tactilely unaware (numb): nothing can be felt. (p. 176)',
+        Mental: 'Mental senses: mental awareness, Mind Reading, Precognition, Postcognition. Mentally unaware: mental senses pick up nothing. (p. 176)',
+        Radio: 'Radio senses: radio, radar. Unaware of radio: no radio reception. (p. 176)',
+    };
+
     /** True when this option of a toggle-type detail is covered by an active condition. */
     const optionCoveredBy = (block, spec, opt) => {
         const by = spec.coveredBy && spec.coveredBy[opt];
@@ -397,8 +435,12 @@
      */
     const blankBlock = () => ({
         id: uid(),                 // unique, never changes, used to find the block
+        type: 'block',             // 'sheet' | 'block' | 'minion' (see TYPES)
         name: '',
         pl: 10,                    // Power Level
+        heroPoints: 1,             // character sheets: hero points in hand (players start a session with 1)
+        identity: blankIdentity(), // character sheets: real name, player, height... (see blankIdentity)
+        background: blankBackground(),   // character sheets: appearance, personality, history
         // { STR: 0, STA: 0, ... } built from the ABILITIES array
         abilities: Object.fromEntries(ABILITIES.map((a) => [a, 0])),
         // { Dodge: 0, Parry: 0, ... } built from the DEFENSES array
@@ -414,7 +456,7 @@
         // Lists, one object per entry (see the row builders in section 5b):
         skills: [],                // { name, ability: 'AGL' | '', ranks }
         advantages: [],            // { name, rank, note }
-        offense: [],               // { name, bonus, range: 'Close' | 'Ranged' | 'Perception', effect }
+        offense: [],               // { name, bonus, range: 'Close' | 'Ranged' | 'Perception', damage, resist: 'Toughness' | 'Fortitude' | 'Will' | 'Dodge' | '', effect (optional text) }
         complications: [],         // { name, note }
         equipment: [],             // { name, cost, note } — only shown while an Equipment advantage is in the list
         notes: '',                 // free text
@@ -426,13 +468,32 @@
      * ====================================================================== */
 
     // Everything the app knows. Saved to localStorage as-is.
-    let state = { version: DATA_VERSION, blocks: [] };
+    let state = { version: DATA_VERSION, file: null, blocks: [] };
 
     // The id of the block currently open in the editor, or null for "none".
     let selectedId = null;
 
+    // How the open block is shown: 'edit' (the form) or 'play' (the sheet for
+    // the table, section 5c). Remembered in localStorage so the app comes
+    // back in play view during a session.
+    const VIEW_KEY = 'statblocks.view';
+    let view = 'edit';
+    try { if (localStorage.getItem(VIEW_KEY) === 'play') view = 'play'; } catch { /* ignore */ }
+    const setView = (mode) => {
+        view = mode;
+        try { localStorage.setItem(VIEW_KEY, mode); } catch { /* ignore */ }
+        renderEditor();
+    };
+
     // Handle for the pending delayed save (see scheduleSave).
     let saveTimer = null;
+
+    // The .json file linked with the Save button (section 7b), if any:
+    // a FileSystemFileHandle, whether this session may write it yet, and the
+    // chain of pending writes.
+    let fileHandle = null;
+    let filePermitted = false;
+    let fileWrite = Promise.resolve();
 
     /** Read the saved state from localStorage, if there is one. */
     const load = () => {
@@ -447,9 +508,13 @@
 
     /** Write the whole state to localStorage right now. */
     const persist = () => {
+        saveTimer = null;   // nothing pending any more
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
             setStatus('Saved');
+            // A .json file linked with the Save button is kept up to date too
+            // (section 7b), once this session has been allowed to write it.
+            if (fileHandle && filePermitted) queueFileWrite();
         } catch (err) {
             console.error(err);
             setStatus('Could not save (storage full or blocked)');
@@ -465,6 +530,11 @@
         setStatus('Saving…');
         saveTimer = setTimeout(persist, 300);
     };
+    // If the page is hidden (tab closed, app switched on a phone) while a
+    // save is still waiting, write it now rather than lose the last edit.
+    const flushSave = () => { if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; persist(); } };
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSave(); });
+    window.addEventListener('pagehide', flushSave);
 
     /**
      * Takes data from ANY source (old saves, hand-edited files, a bare array)
@@ -478,6 +548,9 @@
         const blocks = Array.isArray(src.blocks) ? src.blocks : [];
         return {
             version: DATA_VERSION,
+            // The name of the file this data came from (see parseFileName),
+            // so exports can reuse it: "heroes.json" in, "heroes (1).json" out.
+            file: (src.file && typeof src.file === 'object' && src.file.base) ? { base: String(src.file.base), n: Math.max(0, Math.floor(Number(src.file.n) || 0)) } : null,
             // { ...a, ...b } = copy a, then overwrite with whatever b has.
             blocks: blocks.map((b) => ({
                 ...blankBlock(),
@@ -488,6 +561,11 @@
                 conditions: Array.isArray(b.conditions) ? b.conditions : [],
                 conditionDetails: (b.conditionDetails && typeof b.conditionDetails === 'object') ? { ...b.conditionDetails } : {},
             })).map((b) => {
+                // Kind of block: saves from before there were kinds are ordinary blocks.
+                b.type = TYPES[b.type] ? b.type : 'block';
+                b.heroPoints = clampTo(RANGES.heroPoints, b.heroPoints ?? 1);
+                b.identity = textObject(blankIdentity(), b.identity);
+                b.background = textObject(blankBackground(), b.background);
                 b.conditions = normalizeConditions(b.conditions, b.conditionDetails);
                 pruneConditionDetails(b);
                 // Keep numbers from hand-edited files inside their byte ranges.
@@ -506,7 +584,26 @@
                 // free text, which is split into entries as best we can.
                 b.skills = listify(b.skills, textToSkills, (e) => ({ name: String(e?.name ?? ''), ability: SKILL_ABILITIES.includes(e?.ability) ? e.ability : '', ranks: clampTo(RANGES.pp, e?.ranks) }));
                 b.advantages = listify(b.advantages, textToAdvantages, (e) => ({ name: String(e?.name ?? ''), rank: clampTo(RANGES.pp, e?.rank ?? 1), note: String(e?.note ?? '') }));
-                b.offense = listify(b.offense, textToOffense, (e) => ({ name: String(e?.name ?? ''), bonus: clampTo(RANGES.abilities, e?.bonus), range: OFFENSE_RANGES.includes(e?.range) ? e.range : 'Close', effect: String(e?.effect ?? '') }));
+                b.offense = listify(b.offense, textToOffense, (e) => {
+                    let effect = String(e?.effect ?? '');
+                    let damage = e?.damage, resist = e?.resist;
+                    if (damage == null) {
+                        if (e?.rank != null) {
+                            // A save from the short-lived "rank" shape: the rank was
+                            // the damage when the effect was Damage; otherwise it
+                            // goes back into the text ("Affliction 5 (Dazed)").
+                            if (/^damage\b/i.test(effect) || e.resist === 'Toughness') { damage = e.rank; effect = effect.replace(/^damage\b\s*/i, '').trim(); }
+                            else { damage = 0; if (e.rank > 0 && effect) effect = effect.replace(/^([^(:]*?)\s*([(:].*)?$/, (m, head, tail) => `${head} ${e.rank}${tail ? ' ' + tail : ''}`.trim()); }
+                        } else {
+                            // Older still: "Damage 3" or "Damage 3 (Multiattack)" in
+                            // the effect text; anything else stays as text.
+                            const m = /^\s*damage\s*(\d+)\s*(.*)$/i.exec(effect);
+                            if (m) { damage = Number(m[1]); effect = m[2].trim(); } else damage = 0;
+                        }
+                        if (resist == null) resist = Number(damage) > 0 ? 'Toughness' : '';
+                    }
+                    return { name: String(e?.name ?? ''), bonus: clampTo(RANGES.abilities, e?.bonus), range: OFFENSE_RANGES.includes(e?.range) ? e.range : 'Close', damage: clampTo(RANGES.pp, damage), resist: RESIST_TYPES.includes(resist) ? resist : '', effect };
+                });
                 b.complications = listify(b.complications, textToComplications, (e) => ({ name: String(e?.name ?? ''), note: String(e?.note ?? '') }));
                 b.equipment = listify(b.equipment, () => [], (e) => ({ name: String(e?.name ?? ''), cost: clampTo(RANGES.pp, e?.cost), note: String(e?.note ?? '') }));
                 // Power points: fill in anything an older save lacks.
@@ -565,6 +662,7 @@
     const listEl = $('#block-list');      // <ul> in the sidebar
     const emptyHint = $('#empty-hint');   // "No stat blocks yet" message
     const searchEl = $('#search');        // search box above the list
+    const sortEl = $('#sort');            // sort order dropdown next to it
     const statusEl = $('#save-status');   // "Saved" / "Saving…" text in the footer
 
     /** Show a short message in the editor footer. */
@@ -583,10 +681,15 @@
      * carries data-group="abilities"/"defenses" and data-key="STR"/"Dodge"/...
      * so the input handler later knows which part of the block to update.
      */
-    const buildStatGrid = (container, keys, prefix) => {
+    const buildStatGrid = (container, keys, prefix, plus = false) => {
         const { min, max } = RANGES[prefix];
         container.replaceChildren(...keys.map((k) => {
-            const input = el('input', { type: 'number', step: '1', min, max, 'data-group': prefix, 'data-key': k, value: '0' });
+            // A box that shows its sign ("+9": a bonus to a check) is a text
+            // field like Initiative, because number fields refuse a leading
+            // "+"; data-plus tells the form handler to keep it formatted.
+            const input = plus
+                ? el('input', { type: 'text', inputmode: 'numeric', pattern: '[+\-]?[0-9]*', 'data-plus': '1', 'data-group': prefix, 'data-key': k, value: withPlus(0) })
+                : el('input', { type: 'number', step: '1', min, max, 'data-group': prefix, 'data-key': k, value: '0' });
             // inputmode="numeric" asks phones for a plain digit keypad, which is
             // fine for fields that never go negative.
             if (min >= 0) input.setAttribute('inputmode', 'numeric');
@@ -675,48 +778,58 @@
      * own listeners here; the shared form handler ignores them because they
      * have no name attribute.
      */
+    /**
+     * The control for ONE condition's specifier: toggle chips (Unaware's
+     * senses, Debilitated's abilities) or a text field (Impaired, Weakened
+     * and the like). Used under the editor's chips and, through a dialog, in
+     * the play view. `after` runs after every change, once the block has
+     * been updated and the supersede rules re-applied.
+     */
+    const detailRow = (block, c, after = () => {}) => {
+        const spec = CONDITION_DETAILS[c];
+        const current = block.conditionDetails[c] || '';
+        const row = el('div', { class: 'detail-row' }, el('span', { class: 'detail-label', text: `${spec.label}:` }));
+
+        if (spec.options) {
+            // Multi-select toggles. Stored as "Visual, Tactile" in the
+            // order of spec.options so the text is always predictable.
+            const chosen = new Set(current ? current.split(', ') : []);
+            for (const opt of spec.options) {
+                const by = optionCoveredBy(block, spec, opt);   // e.g. 'Blind', or null
+                const cb = el('input', {
+                    type: 'checkbox', checked: chosen.has(opt), disabled: Boolean(by),
+                    onchange: (e) => {
+                        e.target.checked ? chosen.add(opt) : chosen.delete(opt);
+                        e.target.parentElement.classList.toggle('on', e.target.checked);
+                        setConditionDetail(block, c, spec.options.filter((o) => chosen.has(o)).join(', '));
+                        reconcileConditions(block);   // e.g. picking Auditory now grays out Deaf
+                        after();
+                    },
+                });
+                row.append(el('label', {
+                    class: 'chip mini' + (chosen.has(opt) ? ' on' : '') + (by ? ' superseded' : ''),
+                    'data-detail': c, 'data-opt': opt,   // read by the info cards
+                }, cb, document.createTextNode(opt), el('span', { class: 'chip-by', text: by ? `← ${by}` : '' })));
+            }
+            if (spec.hint) row.append(el('span', { class: 'hint', text: spec.hint }));
+        } else {
+            row.append(el('input', {
+                type: 'text', class: 'detail-text', value: current, placeholder: spec.placeholder,
+                oninput: (e) => { setConditionDetail(block, c, e.target.value.trim()); after(); },
+            }));
+        }
+        return row;
+    };
+
     const renderConditionDetails = (block) => {
         const box = $('#condition-details');
-        const rows = block.conditions.filter((c) => CONDITION_DETAILS[c]).map((c) => {
-            const spec = CONDITION_DETAILS[c];
-            const current = block.conditionDetails[c] || '';
-            const row = el('div', { class: 'detail-row' }, el('span', { class: 'detail-label', text: `${spec.label}:` }));
-
-            if (spec.options) {
-                // Multi-select toggles. Stored as "Visual, Tactile" in the
-                // order of spec.options so the text is always predictable.
-                const chosen = new Set(current ? current.split(', ') : []);
-                for (const opt of spec.options) {
-                    const by = optionCoveredBy(block, spec, opt);   // e.g. 'Blind', or null
-                    const cb = el('input', {
-                        type: 'checkbox', checked: chosen.has(opt), disabled: Boolean(by),
-                        onchange: (e) => {
-                            e.target.checked ? chosen.add(opt) : chosen.delete(opt);
-                            e.target.parentElement.classList.toggle('on', e.target.checked);
-                            setConditionDetail(block, c, spec.options.filter((o) => chosen.has(o)).join(', '));
-                            reconcileConditions(block);   // e.g. picking Auditory now grays out Deaf
-                        },
-                    });
-                    row.append(el('label', {
-                        class: 'chip mini' + (chosen.has(opt) ? ' on' : '') + (by ? ' superseded' : ''),
-                        title: by ? `Covered by ${by}` : false,
-                    }, cb, document.createTextNode(opt), el('span', { class: 'chip-by', text: by ? `← ${by}` : '' })));
-                }
-                if (spec.hint) row.append(el('span', { class: 'hint', text: spec.hint }));
-            } else {
-                row.append(el('input', {
-                    type: 'text', class: 'detail-text', value: current, placeholder: spec.placeholder,
-                    oninput: (e) => setConditionDetail(block, c, e.target.value.trim()),
-                }));
-            }
-            return row;
-        });
+        const rows = block.conditions.filter((c) => CONDITION_DETAILS[c]).map((c) => detailRow(block, c));
         box.replaceChildren(...rows);
         box.hidden = rows.length === 0;
     };
 
     buildStatGrid($('#abilities'), ABILITIES, 'abilities');
-    buildStatGrid($('#defenses'), DEFENSES, 'defenses');
+    buildStatGrid($('#defenses'), DEFENSES, 'defenses', true);   // true: show the sign, as a bonus to a check
     buildConditions($('#conditions'));
 
     /* =========================================================================
@@ -770,12 +883,29 @@
         }
     };
 
-    /** Rebuild the sidebar list, applying the search filter and sorting by name. */
+    /**
+     * The sort orders offered by the dropdown above the list. Each is a
+     * compare function for Array.sort: negative = a first, positive = b
+     * first. Every order falls back to the name so ties come out stable.
+     */
+    const byName = (a, b) => a.name.localeCompare(b.name) || 0;
+    const TYPE_ORDER = { sheet: 0, block: 1, minion: 2 };
+    const SORTS = {
+        name: byName,                                                        // A to Z
+        type: (a, b) => TYPE_ORDER[a.type] - TYPE_ORDER[b.type] || byName(a, b),   // sheets, then blocks, then minions
+        pl: (a, b) => b.pl - a.pl || byName(a, b),                              // highest power level first
+        recent: (a, b) => b.updated - a.updated || byName(a, b),                // most recently edited first
+        // "In trouble": the most battered first: bruises plus active conditions.
+        conditions: (a, b) => (b.conditions.length + b.bruises) - (a.conditions.length + a.bruises) || byName(a, b),
+    };
+    const SORT_KEY = 'statblocks.sort';   // where the chosen order is remembered
+
+    /** Rebuild the sidebar list, applying the search filter and the chosen sort order. */
     const renderList = () => {
         const q = searchEl.value.trim().toLowerCase();
         const blocks = state.blocks
             .filter((b) => !q || b.name.toLowerCase().includes(q))
-            .sort((a, b) => a.name.localeCompare(b.name));
+            .sort(SORTS[sortEl.value] || SORTS.name);
 
         listEl.replaceChildren(...blocks.map((b) => {
             // Small badges under the name: bruise count plus every active condition.
@@ -803,9 +933,11 @@
                     el('div', { class: 'name', text: b.name || '(unnamed)' }),
                     // Just the PL; the only power point fact worth seeing from
                     // the list is an overspend, shown as a small red badge.
+                    // A short tag for sheets and minions in front of the PL.
                     el('div', { class: 'meta' },
+                        ...(TYPE_TAG[b.type] ? [el('span', { class: 'type-tag', text: TYPE_TAG[b.type] })] : []),
                         document.createTextNode(`PL ${b.pl}`),
-                        ...(computePP(b).left < 0 ? [el('span', { class: 'badge over', text: '!', 'data-over': `${-computePP(b).left} power points over`, 'aria-label': `${-computePP(b).left} power points over` })] : []),
+                        ...(tracksPP(b) && computePP(b).left < 0 ? [el('span', { class: 'badge over', text: '!', 'data-over': `${-computePP(b).left} power points over`, 'aria-label': `${-computePP(b).left} power points over` })] : []),
                     ),
                 ),
                 badges,
@@ -836,10 +968,33 @@
      */
     const fitTextarea = (ta) => {
         ta.style.height = 'auto';
-        ta.style.height = `${ta.scrollHeight}px`;
+        // scrollHeight is the text plus padding; the box's height also has to
+        // cover its borders (offsetHeight - clientHeight), or the text is two
+        // pixels too tall for the box and a capped box shows a scrollbar.
+        ta.style.height = `${ta.scrollHeight + (ta.offsetHeight - ta.clientHeight)}px`;
     };
     /** Every text box in the editor: skills, notes and so on, plus the power descriptions. */
-    const fitAllTextareas = () => { for (const ta of form.querySelectorAll('textarea')) fitTextarea(ta); };
+    const fitAllTextareas = () => { for (const ta of form.querySelectorAll('textarea')) fitTextarea(ta); fitAllNames(); };
+
+    /**
+     * A long name in a row's first field (class "fit") shrinks a little
+     * rather than being cut off: the font steps down a pixel at a time, to
+     * about 85% of its size at the least, until the text fits.
+     * The text is measured on an off-screen canvas with the field's font.
+     */
+    const fitCanvas = document.createElement('canvas').getContext('2d');
+    const fitName = (input) => {
+        input.style.fontSize = '';   // measure at the stylesheet's size first
+        const cs = getComputedStyle(input);
+        const room = input.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 2;
+        if (room <= 0) return;       // not visible right now; nothing to measure against
+        const base = parseFloat(cs.fontSize);
+        const fits = (px) => { fitCanvas.font = `${cs.fontWeight} ${px}px ${cs.fontFamily}`; return fitCanvas.measureText(input.value).width <= room; };
+        let size = base;
+        while (!fits(size) && size > base * 0.85) size -= 1;
+        if (size < base) input.style.fontSize = `${size}px`;
+    };
+    const fitAllNames = () => { for (const input of form.querySelectorAll('input.fit')) fitName(input); };
     // Text re-wraps when the window changes width, so refit then too.
     window.addEventListener('resize', fitAllTextareas);
     // Any typing in any text box: refit that box. (Power descriptions do this
@@ -867,15 +1022,19 @@
         });
         const row = el('div', { class: 'power-row' },
             el('input', {
-                class: 'power-name', type: 'text', placeholder: 'Power name (e.g. Flight)', value: p.name,
+                class: 'power-name fit', type: 'text', placeholder: 'Power name (e.g. Flight)', value: p.name,
                 oninput: (e) => { p.name = e.target.value; touch(block); },
             }),
             el('label', { class: 'power-rank' }, document.createTextNode('Rank'), rank),
             el('label', { class: 'power-cost' }, document.createTextNode('PP'), cost),
+            desc,
+        );
+        // Move handle and remove button (the latter finds the power by identity,
+        // not a stored index, which would go stale once another row is removed).
+        row.append(el('div', { class: 'row-tools power-tools' },
+            moveHandle(block, block.powers, p, row),
             el('button', {
                 class: 'btn small icon power-remove', type: 'button', 'aria-label': 'Remove power', text: '\u2715',
-                // Find the power by identity (not a stored index, which would go
-                // stale once another row is removed), drop it, remove just this row.
                 onclick: () => {
                     const i = block.powers.indexOf(p);
                     if (i >= 0) block.powers.splice(i, 1);
@@ -885,31 +1044,52 @@
                     renderList();
                 },
             }),
-            desc,
-        );
+        ));
         return row;
     };
 
     /** Copy the selected block's values into the form, or hide the form if none. */
     const renderEditor = () => {
         const block = selected();
+        const play = $('#play');
+        const floatBar = $('#float-bar');
         if (!block) {
             editor.hidden = true;
+            play.hidden = true;
+            floatBar.hidden = true;
             layout.classList.remove('editing');   // on phones this brings the list back
             return;
         }
-        editor.hidden = false;
         layout.classList.add('editing');          // on phones this hides the list
+        floatBar.hidden = false;
+        $('#btn-play').textContent = view === 'play' ? 'Edit' : 'Play';
+        if (view === 'play') {                    // the sheet instead of the form
+            editor.hidden = true;
+            play.hidden = false;
+            renderPlay(block);
+            return;
+        }
+        play.hidden = true;
+        editor.hidden = false;
+        applyType(block);                         // show the sections this kind of block has
 
         // form.elements.NAME finds the input with name="NAME".
         form.elements.name.value = block.name;
         form.elements.pl.value = block.pl;
         form.elements.initiative.value = withPlus(block.initiative);
         form.elements.bruises.value = block.bruises;
+        form.elements.heroPoints.value = block.heroPoints;
+
+        // Identity and background fields (character sheets): data-text="identity.realName".
+        for (const input of form.querySelectorAll('[data-text]')) {
+            const [obj, key] = input.dataset.text.split('.');
+            input.value = block[obj]?.[key] ?? '';
+        }
 
         // Ability and defense inputs: look up block.abilities.STR etc.
         for (const input of form.querySelectorAll('[data-group]')) {
-            input.value = block[input.dataset.group][input.dataset.key] ?? 0;
+            const v = block[input.dataset.group][input.dataset.key] ?? 0;
+            input.value = input.dataset.plus ? withPlus(v) : v;   // defenses show their sign
         }
 
         // Condition chips: ticked / grayed out according to the block.
@@ -922,6 +1102,26 @@
 
         renderPowers(block);
         renderPP(block);
+    };
+
+    /**
+     * Show the sections this kind of block has and hide the rest. Every
+     * element in the form with data-types="..." lists the kinds that show it;
+     * elements without the attribute are shown for every kind. The Equipment
+     * section also has its own rule (only while an Equipment advantage is in
+     * the list), which renderEquipment() combines with this one.
+     */
+    const typeShows = (node, type) => !node.dataset.types || node.dataset.types.split(' ').includes(type);
+    const applyType = (block) => {
+        for (const node of form.querySelectorAll('[data-types]')) node.hidden = !typeShows(node, block.type);
+        $('#f-type').value = block.type;
+        // Minions have no Skills, Advantages or Powers sections, so the notes
+        // box doubles as the place for all of that.
+        const minion = block.type === 'minion';
+        $('#notes-legend').textContent = minion ? 'Traits & notes' : 'Notes';
+        form.elements.notes.placeholder = minion ? 'Skills, advantages, powers and gear, in a line or two\u2026' : 'Anything else\u2026';
+        renderEquipment(block);
+        fitAllTextareas();   // boxes that were hidden had no height to measure
     };
 
     /** Redraw everything. */
@@ -946,9 +1146,11 @@
         if (id && window.innerWidth < 820) window.scrollTo({ top: 0 });
     };
 
-    const createBlock = () => {
+    const createBlock = (type = 'block') => {
         const b = blankBlock();
+        b.type = TYPES[type] ? type : 'block';
         state.blocks.push(b);
+        if (view === 'play') setView('edit');   // a blank sheet is nothing to look at: start in the form
         scheduleSave();
         select(b.id);
         form.elements.name.focus();   // cursor straight into the name field
@@ -994,7 +1196,13 @@
             // value had to change, so typing is not interrupted.
             const v = clampTo(RANGES[t.dataset.group], t.value);
             block[t.dataset.group][t.dataset.key] = v;
-            if (t.value !== '' && Number(t.value) !== v) t.value = v;
+            if (t.dataset.plus) {
+                // Defenses show their sign ("+9", "-1") like Initiative; a lone
+                // sign is left alone while the number is being typed.
+                if (!/^[+\-]?$/.test(t.value) && t.value !== withPlus(v)) t.value = withPlus(v);
+            } else if (t.value !== '' && Number(t.value) !== v) {
+                t.value = v;
+            }
         } else if (t.dataset.condition) {
             // A condition chip. Add or remove it, then let normalizeConditions
             // drop anything the new selection supersedes (e.g. ticking Stunned
@@ -1008,8 +1216,17 @@
             const v = clampTo(RANGES.pp, t.value);
             block.pp[t.dataset.pp] = v;
             if (t.value !== '' && Number(t.value) !== v) t.value = v;
+        } else if (t.dataset.text) {
+            // An identity or background field: data-text="identity.realName"
+            // means block.identity.realName.
+            const [obj, key] = t.dataset.text.split('.');
+            block[obj][key] = t.value;
+        } else if (t.name === 'type') {
+            // The kind-of-block dropdown: store it and show/hide the sections.
+            if (TYPES[t.value]) block.type = t.value;
+            applyType(block);
         } else if (t.name in RANGES) {
-            // pl, initiative, bruises: same clamping as the stat boxes.
+            // pl, initiative, bruises, hero points: same clamping as the stat boxes.
             const v = clampTo(RANGES[t.name], t.value);
             block[t.name] = v;
             if (t.dataset.plus) {
@@ -1023,7 +1240,8 @@
             // Any other named field (name, skills, notes...) is stored as text.
             block[t.name] = t.value;
         } else {
-            return;   // power rows handle their own input in renderPowers
+            if (t.classList.contains('fit')) fitName(t);   // a row's name: keep it fitting as it is typed
+            return;   // list rows store their own input (section 5b)
         }
 
         touch(block);
@@ -1079,11 +1297,27 @@
         renderList();
     });
 
-    $('#btn-new').addEventListener('click', createBlock);
+    // "+ New" asks which kind of block to make (the chooser dialog), then
+    // creates it. Esc, Cancel or a tap on the backdrop just closes the chooser.
+    const typeDialog = $('#type-dialog');
+    $('#btn-new').addEventListener('click', () => typeDialog.showModal());
+    $('#type-close').addEventListener('click', () => typeDialog.close());
+    typeDialog.addEventListener('click', (e) => { if (e.target === typeDialog) typeDialog.close(); });
+    for (const btn of typeDialog.querySelectorAll('[data-type]')) {
+        btn.addEventListener('click', () => { typeDialog.close(); createBlock(btn.dataset.type); });
+    }
     $('#btn-duplicate').addEventListener('click', duplicateBlock);
     $('#btn-delete').addEventListener('click', deleteBlock);
     $('#btn-back').addEventListener('click', () => select(null));
     searchEl.addEventListener('input', renderList);   // filter as you type
+    // Sort order: redraw on change and remember the choice. Storage can be
+    // blocked (private browsing), in which case the dropdown simply starts
+    // on Name next time.
+    try { if (SORTS[localStorage.getItem(SORT_KEY)]) sortEl.value = localStorage.getItem(SORT_KEY); } catch { /* ignore */ }
+    sortEl.addEventListener('change', () => {
+        try { localStorage.setItem(SORT_KEY, sortEl.value); } catch { /* ignore */ }
+        renderList();
+    });
 
     /* =========================================================================
      * 7. EXPORT / IMPORT — moving data to and from a .json file.
@@ -1094,12 +1328,26 @@
      * On phones we prefer the share sheet (navigator.share) because it lets
      * them save to Files / OneDrive / Drive. Otherwise we trigger a download.
      */
+    /**
+     * "heroes (2).json" -> { base: 'heroes', n: 2 }; "heroes.json" -> { base: 'heroes', n: 0 }.
+     * Remembered on import so exports can carry the name on with a number.
+     */
+    const parseFileName = (name) => {
+        const m = /^(.*?)(?: \((\d+)\))?\.json$/i.exec(String(name).trim());
+        return m && m[1] ? { base: m[1], n: Number(m[2] || 0) } : null;
+    };
+    /** The default export name: the imported name with the next number, else today's date. */
+    const stampName = () => `statblocks-${new Date().toISOString().slice(0, 10)}.json`;   // "statblocks-2026-10-17.json"
+
     const exportJson = async () => {
         clearTimeout(saveTimer);
-        persist();   // make sure the file matches what's on screen
+        // Data that came from "heroes.json" goes out as "heroes (1).json", then
+        // "heroes (2).json" and so on; the counter is bumped first so the file
+        // itself records the number it was given. Otherwise: today's date.
+        if (state.file?.base) state.file.n += 1;
+        const filename = state.file?.base ? `${state.file.base} (${state.file.n}).json` : stampName();
+        persist();   // make sure the file matches what's on screen (and keeps the counter)
 
-        const stamp = new Date().toISOString().slice(0, 10);   // "2026-10-17"
-        const filename = `statblocks-${stamp}.json`;
         const json = JSON.stringify(state, null, 2);           // 2 = pretty-print with indentation
         const blob = new Blob([json], { type: 'application/json' });
 
@@ -1161,6 +1409,7 @@
                 state.blocks = [...byId.values()];
             }
 
+            state.file = parseFileName(file.name);   // exports will carry this name on
             selectedId = null;
             persist();
             render();
@@ -1169,6 +1418,99 @@
     };
 
     $('#btn-export').addEventListener('click', exportJson);
+
+    /* -------------------------------------------------------------------------
+     * 7b. SAVE — writes to the SAME .json file every time.
+     *
+     * A web page cannot normally overwrite a file on disk, which is why Export
+     * always makes a new download. The File System Access API (Chrome and
+     * Edge on a PC; not Firefox, Safari or any phone browser) lets the user
+     * pick a file ONCE and hands the page a "handle" it can write through
+     * again later. The handle is kept in IndexedDB (localStorage can only
+     * hold text) so it is still known after a reload; the browser then asks
+     * the user to confirm access the first time Save is pressed in a session.
+     * After that first press every edit is also written to the file (see
+     * persist), so nothing is lost if they forget to press it again.
+     * Where the API is missing the button stays hidden.
+     * ---------------------------------------------------------------------- */
+    const FS_SUPPORTED = 'showSaveFilePicker' in window;
+    const saveBtn = $('#btn-save');
+    saveBtn.hidden = !FS_SUPPORTED;
+
+    // A minimal key-value store in IndexedDB, just for the file handle.
+    const kvDb = () => new Promise((resolve, reject) => {
+        const req = indexedDB.open('statblocks', 1);
+        req.onupgradeneeded = () => req.result.createObjectStore('kv');
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+    const kvGet = async (key) => new Promise((resolve, reject) => {
+        kvDb().then((db) => { const r = db.transaction('kv').objectStore('kv').get(key); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); }).catch(reject);
+    });
+    const kvSet = async (key, value) => new Promise((resolve, reject) => {
+        kvDb().then((db) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(value, key); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); }).catch(reject);
+    });
+
+    /** The button's tooltip names the linked file, if there is one. */
+    const showFileName = () => {
+        saveBtn.title = fileHandle ? `Save to ${fileHandle.name}` : 'Pick a .json file to save to; later presses overwrite it';
+    };
+
+    /** Overwrite the linked file with the current state. */
+    const writeFile = async () => {
+        const writable = await fileHandle.createWritable();   // truncates the file
+        await writable.write(JSON.stringify(state, null, 2));
+        await writable.close();                                // the write only lands on close
+        setStatus(`Saved to ${fileHandle.name}`);
+    };
+    // Writes are chained so two never overlap (a fast typist and the
+    // visibility flush could otherwise race).
+    const queueFileWrite = () => {
+        fileWrite = fileWrite.then(writeFile).catch((err) => {
+            console.error(err);
+            filePermitted = false;   // ask again on the next Save press
+            setStatus(`Could not write ${fileHandle?.name || 'the file'}`);
+        });
+    };
+
+    const saveToFile = async () => {
+        try {
+            if (!fileHandle) {
+                // First time: let the user pick (or create) the file. Suggest the
+                // imported file's own name so they can simply overwrite it.
+                fileHandle = await window.showSaveFilePicker({
+                    suggestedName: state.file?.base ? `${state.file.base}.json` : stampName(),
+                    types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }],
+                });
+                state.file = parseFileName(fileHandle.name) || state.file;   // exports follow this name too
+                showFileName();
+                kvSet('fileHandle', fileHandle).catch(() => { /* private mode etc.: just not remembered */ });
+            }
+            // After a reload the handle is known but writing needs the user's OK again.
+            if (fileHandle.requestPermission && (await fileHandle.requestPermission({ mode: 'readwrite' })) !== 'granted') {
+                setStatus('Not allowed to write the file');
+                return;
+            }
+            filePermitted = true;
+            clearTimeout(saveTimer);
+            persist();   // writes localStorage and, now that we may, the file
+        } catch (err) {
+            if (err.name === 'AbortError') return;   // the user closed the picker
+            console.error(err);
+            setStatus('Could not save the file');
+        }
+    };
+    saveBtn.addEventListener('click', saveToFile);
+
+    // On start: pick up the handle from last time, if there is one.
+    if (FS_SUPPORTED) {
+        kvGet('fileHandle').then((h) => {
+            if (!h) return;
+            fileHandle = h;
+            showFileName();
+            setStatus(`Press Save to keep saving to ${h.name}`);
+        }).catch(() => { /* no IndexedDB: Save just asks for a file again */ });
+    }
 
     // The real <input type="file"> is hidden; the visible button just clicks it.
     $('#btn-import').addEventListener('click', () => $('#file-import').click());
@@ -1379,6 +1721,13 @@
             }
             case 'bruised': { const f = find('Combat checks', (e) => e.name === 'Damage results'); return f && { ...f, title: 'Bruised', text: f.entry.text }; }
             case 'initiative': return find('Combat checks', (e) => e.name === 'Initiative');
+            case 'hero': return find('Making checks', (e) => e.name === 'Hero points');
+            case 'option': {   // "Unaware|Visual" or "Debilitated|STR": an option of a condition's specifier
+                const [cond, opt] = key.split('|');
+                if (ABILITIES.includes(opt)) return find('Ability checks', (e) => e.name.includes(`(${opt})`));
+                const f = find(null, (e) => e.condition === cond);
+                return f && { ...f, title: `${opt} sense`, text: SENSE_INFO[opt] || f.entry.text };
+            }
             case 'pp': {   // a figure or category of the Power points section
                 const f = find('Ability checks', (e) => e.name === 'Power point costs');
                 if (!f) return null;
@@ -1400,6 +1749,7 @@
     /** Works out what an element on screen refers to: which kind and which key. */
     const infoSubject = (target) => {
         const c = target.classList;
+        if (c.contains('mini') && target.dataset.opt) return ['option', `${target.dataset.detail}|${target.dataset.opt}`];
         const cond = target.querySelector?.('[data-condition]');
         if (cond) return ['condition', cond.dataset.condition];
         const stat = target.querySelector?.('[data-key]');
@@ -1422,6 +1772,7 @@
         if (c.contains('inline-field')) {
             if (target.querySelector('#f-initiative')) return ['initiative', 'Initiative'];
             if (target.querySelector('#f-bruises')) return ['bruised', 'Bruised'];
+            if (target.querySelector('#f-hero')) return ['hero', 'Hero points'];
             if (target.querySelector('#f-pp-earned')) return ['pp', 'Earned'];
         }
         if (c.contains('pp-stat') || c.contains('pp-row')) return ['pp', label()];
@@ -1431,6 +1782,7 @@
         if (target.closest('#advantages')) return ['advantage', name];
         if (target.closest('#complications')) return ['complication', name];
         if (c.contains('power-row')) return ['power', name];
+        if (target.dataset.kind) return [target.dataset.kind, target.dataset.name || ''];   // a row of a play-view table
         return null;
     };
 
@@ -1466,6 +1818,11 @@
             // Debilitated etc. have a small table worth showing in full.
             ...(entry.rows && !found.text ? [el('table', {}, ...entry.rows.map(([a, b]) => el('tr', {}, el('td', { text: a }), el('td', { text: b }))))] : []),
         );
+        // A modal <dialog> sits in the browser's "top layer", above everything
+        // else on the page, so a card for something inside one (the specifier
+        // chips in the play view) has to live inside that dialog to be seen.
+        const host = target.closest('dialog[open]') || document.body;
+        if (infoPop.parentElement !== host) host.append(infoPop);
         infoPop.hidden = false;
         infoTarget = target;
         infoShownAt = performance.now();   // see the scroll / resize listeners below
@@ -1489,7 +1846,7 @@
     };
 
     /** The elements that get a card: condition chips, stat boxes, list badges. */
-    const infoTargetOf = (node) => node.closest?.('#conditions .chip, .stat, .block-item .badge, .pl-label, .inline-field, .pp-stat, .pp-row, #skills .list-row, #advantages .list-row, #complications .list-row, #powers .power-row');
+    const infoTargetOf = (node) => node.closest?.('#conditions .chip, .chip.mini, .stat, .block-item .badge, .pl-label, .inline-field, .pp-stat, .pp-row, #skills .list-row, #advantages .list-row, #complications .list-row, #powers .power-row, .play-stat, .play-cond, .play-body tr[data-kind]');
     /** A list row shows no card while you are typing in it, and a long press on its fields keeps the normal text menu. */
     const infoIsRow = (target) => target.classList.contains('list-row') || target.classList.contains('power-row');
     const infoFormControl = (node) => node.closest?.('input, select, textarea, button');
@@ -1617,6 +1974,243 @@
     narrowScreen.addEventListener('change', () => topbar.classList.remove('bar-hidden'));
 
     /* =========================================================================
+     * 5c. PLAY VIEW — the open block drawn as a sheet for the table. Read-only
+     *     apart from what changes in play: bruises, hero points and the
+     *     conditions. Rebuilt from scratch after every change (it is cheap,
+     *     and it keeps this code simple).
+     * ====================================================================== */
+    const playEl = $('#play');
+    let playTab = 'offense';   // which tab is open; kept while switching blocks
+
+    /** One stat box: label, big value, optional small line under it. */
+    const playBox = (label, value, sub, attrs = {}, adjusted = false) => el('div', { class: 'play-stat' + (adjusted ? ' adjusted' : '') },
+        el('span', { class: 'lbl', text: label, ...attrs }),
+        el('span', { class: 'val', text: value }),
+        ...(sub ? [el('span', { class: 'sub', text: sub })] : []),
+    );
+
+    /**
+     * The defenses as they stand right now. Vulnerable halves Dodge and Parry
+     * (rounding up) and Defenseless sets them to 0 (p. 245); each bruise is
+     * -1 on further Toughness checks against damage (p. 241). Dodge and Parry
+     * also show their defense class (defense + 10), the number attackers
+     * must reach.
+     */
+    const effectiveDefense = (block, d) => {
+        let v = block.defenses[d] || 0;
+        let note = '';
+        if (d === 'Dodge' || d === 'Parry') {
+            if (block.conditions.includes('Defenseless')) { v = 0; note = 'defenseless'; }
+            else if (block.conditions.includes('Vulnerable')) { v = Math.ceil(v / 2); note = 'vulnerable, halved'; }
+        } else if (d === 'Toughness' && block.bruises > 0) {
+            v -= block.bruises; note = `-${block.bruises} bruised`;
+        }
+        return { v, note };
+    };
+
+    /** A counter with - and + buttons that stores a clamped number. */
+    const playCounter = (label, value, range, onChange, over = false) => el('div', { class: 'counter' },
+        document.createTextNode(label),
+        el('button', { type: 'button', class: 'btn small', text: '\u2212', 'aria-label': `${label} down`, onclick: () => onChange(clampTo(range, value - 1)) }),
+        el('span', { class: 'val' + (over ? ' over' : ''), text: value }),
+        el('button', { type: 'button', class: 'btn small', text: '+', 'aria-label': `${label} up`, onclick: () => onChange(clampTo(range, value + 1)) }),
+    );
+
+    /** A table for a tab: `head` is the column labels, each row is [cells, name]. */
+    const playTable = (head, rows, kind) => rows.length
+        ? el('table', {},
+            el('thead', {}, el('tr', {}, ...head.map((h) => el('th', { text: h })))),
+            el('tbody', {}, ...rows.map(([cells, name]) => el('tr', kind ? { 'data-kind': kind, 'data-name': name } : {}, ...cells))))
+        : el('p', { class: 'play-empty', text: 'Nothing here yet. Add it in the editor.' });
+    // A cell. The label (data-lbl) only shows on phones, where the rows stack
+    // and the column headings are gone.
+    const td = (cls, text, lbl) => el('td', { class: cls, ...(lbl ? { 'data-lbl': lbl } : {}), text });
+
+    /**
+     * What an attack row shows beyond what was typed: which defense the
+     * attack check is made against (Parry for close, Dodge for ranged, none
+     * at perception range), the damage rank, and its resistance DC:
+     * Toughness 15 + rank, anything else 10 + rank (p. 246). The effect
+     * text is optional extra information (an affliction, a modifier...).
+     */
+    const attackInfo = (a) => {
+        const vs = a.range === 'Close' ? 'vs. Parry' : a.range === 'Ranged' ? 'vs. Dodge' : 'no attack check';
+        const damage = (a.damage || 0) > 0 || a.resist ? `Damage ${a.damage || 0}` : '';
+        const dc = resistDC(a);
+        return { vs, damage, dc: dc == null ? '' : `${a.resist} DC ${dc}` };
+    };
+
+    /** The tabs this kind of block has, in order. */
+    const playTabs = (block) => {
+        const minion = block.type === 'minion';
+        const tabs = [['offense', 'Attacks']];
+        if (!minion) tabs.push(['powers', 'Powers'], ['skills', 'Skills'], ['advantages', 'Advantages']);
+        if (!minion && computeEP(block).rank > 0) tabs.push(['equipment', 'Equipment']);
+        if (!minion) tabs.push(['complications', 'Complications']);
+        tabs.push(['notes', minion ? 'Traits & notes' : 'Notes']);
+        if (block.type === 'sheet') tabs.push(['background', 'Background']);
+        return tabs;
+    };
+
+    /** The contents of one tab. */
+    const playTabBody = (block, tab) => {
+        switch (tab) {
+            case 'offense': return playTable(['Attack', 'Bonus', 'Range', 'Damage', 'Effect'], block.offense.map((a) => {
+                const { vs, damage, dc } = attackInfo(a);
+                return [[
+                    td('name', a.name || '(unnamed)'),
+                    td('num', withPlus(a.bonus || 0), 'Bonus'),
+                    el('td', { class: 'tag', 'data-lbl': 'Range' }, document.createTextNode(a.range || ''), el('span', { class: 'sub', text: vs })),
+                    el('td', { class: 'tag', 'data-lbl': 'Damage' }, document.createTextNode(damage || '\u2014'), ...(dc ? [el('span', { class: 'sub', text: dc })] : [])),
+                    td('desc', a.effect || ''),
+                ], a.name];
+            }));
+            case 'powers': return playTable(['Power', 'Rank', 'PP', 'Description'], block.powers.map((p) => [[td('name', p.name || '(unnamed)'), td('num', p.rank || 0, 'Rank'), td('num', p.cost || 0, 'PP'), td('desc', p.desc || '')], p.name]), 'power');
+            case 'skills': return playTable(['Skill', 'Ability', 'Ranks', 'Total'], block.skills.map((s) => [[td('name', s.name || '(unnamed)'), td('tag', s.ability || '\u2014', 'Ability'), td('num', s.ranks || 0, 'Ranks'), td('num', withPlus(skillTotal(block, s)), 'Total')], s.name]), 'skill');
+            case 'advantages': return playTable(['Advantage', 'Rank', 'Note'], block.advantages.map((a) => [[td('name', a.name || '(unnamed)'), td('num', a.rank || 0, 'Rank'), td('desc', a.note || '')], a.name]), 'advantage');
+            case 'equipment': {
+                const ep = computeEP(block);
+                return el('div', {},
+                    el('div', { class: 'play-stats' }, el('span', {}, document.createTextNode('Points'), el('b', { text: ep.total })), el('span', {}, document.createTextNode('Spent'), el('b', { text: ep.spent })), el('span', {}, document.createTextNode('Left'), el('b', { text: ep.left, class: ep.left < 0 ? 'over' : '' }))),
+                    playTable(['Item', 'EP', 'Note'], block.equipment.map((e) => [[td('name', e.name || '(unnamed)'), td('num', e.cost || 0, 'EP'), td('desc', e.note || '')], e.name])),
+                );
+            }
+            case 'complications': return playTable(['Complication', 'How it plays out'], block.complications.map((c) => [[td('name', c.name || '(unnamed)'), td('desc', c.note || '')], c.name]), 'complication');
+            case 'notes': return block.notes.trim() ? el('div', { class: 'play-text', text: block.notes }) : el('p', { class: 'play-empty', text: 'Nothing here yet. Add it in the editor.' });
+            case 'background': {
+                const parts = [['Appearance', block.background.appearance], ['Personality', block.background.personality], ['History', block.background.history]].filter(([, t]) => t.trim());
+                return parts.length
+                    ? el('div', {}, ...parts.flatMap(([h, t]) => [el('h4', { text: h }), el('div', { class: 'play-text', text: t })]))
+                    : el('p', { class: 'play-empty', text: 'Nothing here yet. Add it in the editor.' });
+            }
+        }
+        return el('div');
+    };
+
+    /** Draw (or redraw) the whole play view for a block. */
+    const renderPlay = (block) => {
+        // Head: name, then kind, PL and (for sheets) who they really are.
+        $('#play-name').textContent = block.name || '(unnamed)';
+        const sub = [TYPES[block.type], `PL ${block.pl}`];
+        if (block.type === 'sheet') {
+            if (block.identity.realName) sub.push(block.identity.realName + (block.identity.status ? ` (${block.identity.status.toLowerCase()} identity)` : ''));
+            if (block.identity.group) sub.push(block.identity.group);
+        }
+        $('#play-sub').textContent = sub.join(' \u00b7 ');
+
+        // Abilities and defenses. data-group / data-key on the label make the
+        // info cards work here the same as on the editor's boxes.
+        $('#play-abilities').replaceChildren(...ABILITIES.map((a) => playBox(a, block.abilities[a] || 0, '', { 'data-group': 'abilities', 'data-key': a })));
+        $('#play-defenses').replaceChildren(
+            ...DEFENSES.map((d) => {
+                const { v, note } = effectiveDefense(block, d);
+                const dc = (d === 'Dodge' || d === 'Parry') ? `DC ${10 + v}` : '';
+                return playBox(d, withPlus(v), [dc, note].filter(Boolean).join(' \u00b7 '), { 'data-group': 'defenses', 'data-key': d }, Boolean(note));
+            }),
+            playBox('Initiative', withPlus(block.initiative || 0), ''),
+        );
+
+        // Counters: bruises always; hero points on sheets; power points as a figure.
+        const counters = [playCounter('Bruises', block.bruises, RANGES.bruises, (v) => { block.bruises = v; form.elements.bruises.value = v; touch(block); renderList(); renderPlay(block); })];
+        if (block.type === 'sheet') counters.push(playCounter('Hero points', block.heroPoints, RANGES.heroPoints, (v) => { block.heroPoints = v; form.elements.heroPoints.value = v; touch(block); renderPlay(block); }));
+        if (tracksPP(block)) {
+            const pp = computePP(block);
+            counters.push(el('div', { class: 'counter' }, document.createTextNode('Power points'), el('span', { class: 'val' + (pp.left < 0 ? ' over' : ''), text: `${pp.spent}/${pp.total}` })));
+        }
+        $('#play-counters').replaceChildren(...counters);
+
+        // Conditions: one pill per active condition (with its specifier), a
+        // cross to remove it, "+ Condition" to add one, Clear for all.
+        const pills = block.conditions.map((c) => {
+            let detail = block.conditionDetails[c] || '';
+            const spec = CONDITION_DETAILS[c];
+            if (spec && spec.options && detail === spec.options.join(', ')) detail = '';   // all senses = plain Unaware
+            return el('span', { class: 'play-cond' },
+                el('span', { 'data-condition': c, text: detail ? `${c} (${detail})` : c }),
+                // A pencil to pick or change the specifier, for the conditions that take one.
+                ...(spec ? [el('button', { type: 'button', class: 'x edit', text: '\u270E', 'aria-label': `Change ${c}`, onclick: () => openDetailDialog(block, c) })] : []),
+                el('button', { type: 'button', class: 'x', text: '\u2715', 'aria-label': `Remove ${c}`, onclick: () => {
+                    block.conditions = block.conditions.filter((x) => x !== c);
+                    reconcileConditions(block); touch(block); renderList(); renderPlay(block);
+                } }),
+            );
+        });
+        $('#play-conds').replaceChildren(
+            ...(pills.length ? pills : [el('span', { class: 'play-none', text: 'No conditions' })]),
+            // With conditions on, these two step back (class "quiet").
+            el('button', { type: 'button', class: 'btn small' + (pills.length ? ' quiet' : ''), text: '+ Condition', onclick: () => openCondPicker(block) }),
+            ...(pills.length || block.bruises ? [el('button', { type: 'button', class: 'btn small' + (pills.length ? ' quiet' : ''), text: 'Clear', onclick: () => {
+                block.conditions = []; block.conditionDetails = {}; block.bruises = 0; form.elements.bruises.value = 0;
+                reconcileConditions(block); touch(block); renderList(); renderPlay(block);
+            } })] : []),
+        );
+
+        // Tabs and the open tab's contents.
+        const tabs = playTabs(block);
+        if (!tabs.some(([k]) => k === playTab)) playTab = tabs[0][0];
+        $('#play-tabs').replaceChildren(...tabs.map(([key, label]) => el('button', {
+            type: 'button', class: 'btn tab', text: label, 'aria-pressed': String(key === playTab),
+            onclick: () => { playTab = key; renderPlay(block); },
+        })));
+        $('#play-body').replaceChildren(playTabBody(block, playTab));
+    };
+
+    // --- "+ Condition": every condition that is not active and not covered by
+    // an active one, each with the first line of its rules text, filtered by
+    // the search box. Picking one that takes a specifier opens that next.
+    const condDialog = $('#cond-dialog');
+    const condSearch = $('#cond-search');
+    let condBlock = null;   // the block the picker was opened for
+    const renderCondPicker = () => {
+        const block = condBlock;
+        const q = condSearch.value.trim().toLowerCase();
+        const covered = supersededBy(block.conditions, block.conditionDetails);
+        const items = CONDITIONS.filter((c) => !block.conditions.includes(c) && !covered.has(c)).map((c) => {
+            const info = infoLookup('condition', c);
+            return { c, text: info ? [].concat(info.entry.text || [])[0] || '' : '' };
+        }).filter(({ c, text }) => !q || `${c} ${text}`.toLowerCase().includes(q));
+        $('#cond-body').replaceChildren(...(items.length ? items.map(({ c, text }) =>
+            el('button', { type: 'button', class: 'pick-item', onclick: () => {
+                block.conditions = [...block.conditions, c];
+                reconcileConditions(block); touch(block); renderList(); renderPlay(block);
+                condDialog.close();
+                if (CONDITION_DETAILS[c] && block.conditions.includes(c)) openDetailDialog(block, c);
+            } },
+                el('span', { class: 'pick-name', text: c }),
+                ...(text ? [el('span', { class: 'pick-desc', text })] : []),
+            )
+        ) : [el('p', { class: 'ref-empty', text: 'Nothing matches that filter.' })]));
+    };
+    const openCondPicker = (block) => {
+        condBlock = block;
+        condSearch.value = '';
+        renderCondPicker();
+        condDialog.showModal();
+        $('#cond-body').scrollTop = 0;
+        condSearch.focus();
+    };
+    condSearch.addEventListener('input', renderCondPicker);
+    $('#cond-close').addEventListener('click', () => condDialog.close());
+    condDialog.addEventListener('click', (e) => { if (e.target === condDialog) condDialog.close(); });
+
+    // --- The specifier of one condition: the editor's detail row in a dialog.
+    // Every change updates the block and redraws the pills behind it.
+    const detailDialog = $('#detail-dialog');
+    const openDetailDialog = (block, c) => {
+        $('#detail-title').textContent = c;
+        const row = detailRow(block, c, () => renderPlay(block));
+        $('#detail-body').replaceChildren(row);
+        detailDialog.showModal();
+        row.querySelector('.detail-text')?.focus();
+    };
+    $('#detail-close').addEventListener('click', () => detailDialog.close());
+    detailDialog.addEventListener('click', (e) => { if (e.target === detailDialog) detailDialog.close(); });
+
+    // Switching between the form and the sheet.
+    // One button toggles between the two; renderEditor() relabels it.
+    $('#btn-play').addEventListener('click', () => setView(view === 'play' ? 'edit' : 'play'));
+
+    /* =========================================================================
      * 5b. LIST SECTIONS — skills, advantages, offense and complications work
      *     like the powers list: one row per entry, added and removed one at a
      *     time. Each has "+ Add" for a blank row and (except offense) "+ From
@@ -1644,6 +2238,74 @@
         return sel;
     };
 
+    /**
+     * A grab handle that moves its row up or down the list: drag it with the
+     * mouse or a finger, or press the arrow keys while it has the focus.
+     * The rows are moved in the page as you go; on release the entry is
+     * moved to the same place in the block's array and the change is saved.
+     * (The play view shows the lists in array order, so it follows.)
+     */
+    const moveHandle = (block, list, entry, row) => {
+        const rows = () => [...row.parentElement.children];
+        const commit = () => {
+            const from = list.indexOf(entry), to = rows().indexOf(row);
+            if (from < 0 || to < 0 || from === to) return;
+            list.splice(from, 1);
+            list.splice(to, 0, entry);
+            touch(block);
+        };
+        const handle = el('button', { type: 'button', class: 'btn small icon grab', text: '\u2630', 'aria-label': 'Move: drag, or use the arrow keys' });
+        handle.addEventListener('keydown', (e) => {
+            if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+            e.preventDefault();
+            const other = e.key === 'ArrowUp' ? row.previousElementSibling : row.nextElementSibling;
+            if (!other) return;
+            e.key === 'ArrowUp' ? row.after(other) : row.before(other);
+            commit();
+            handle.focus();
+        });
+        handle.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();                      // no text selection, no focus change
+            row.classList.add('dragging');
+            // The listeners go on the document, not the handle: moving the row
+            // moves the handle too, and a browser drops pointer capture (and
+            // the events with it) from an element that is moved in the page.
+            const id = e.pointerId;
+            const move = (ev) => {
+                if (ev.pointerId !== id) return;
+                // Pass a row above whose middle the pointer has risen above,
+                // or a row below whose middle it has sunk below. The OTHER
+                // rows are moved around the dragged one, which itself stays
+                // put in the page: moving it (and the handle inside it) would
+                // make the browser stop sending the drag's pointer events.
+                const all = rows();
+                const i = all.indexOf(row);
+                const mid = (r) => { const b = r.getBoundingClientRect(); return b.top + b.height / 2; };
+                for (let k = 0; k < i; k++) if (ev.clientY < mid(all[k])) { row.after(...all.slice(k, i)); return; }
+                for (let k = all.length - 1; k > i; k--) if (ev.clientY > mid(all[k])) { row.before(...all.slice(i + 1, k + 1)); return; }
+            };
+            const end = (ev) => {
+                if (ev.pointerId !== id) return;
+                document.removeEventListener('pointermove', move);
+                document.removeEventListener('pointerup', end);
+                document.removeEventListener('pointercancel', end);
+                row.classList.remove('dragging');
+                commit();
+            };
+            document.addEventListener('pointermove', move);
+            document.addEventListener('pointerup', end);
+            document.addEventListener('pointercancel', end);
+        });
+        return handle;
+    };
+
+    /** The grab handle and the remove button together, at the end of a row. */
+    const rowTools = (block, list, entry, row, extra = '') => el('div', { class: 'row-tools' + (extra ? ` ${extra}` : '') },
+        moveHandle(block, list, entry, row),
+        removeButton(block, list, entry, row),
+    );
+
     /** The remove button every row ends with: drop the entry, remove the row, refresh totals. */
     const removeButton = (block, list, entry, row) => el('button', {
         class: 'btn small icon', type: 'button', 'aria-label': 'Remove', text: '\u2715',
@@ -1663,46 +2325,56 @@
 
     // Skills and advantages are drawn as table lines: the column headings are
     // in index.html (.table-head) and the row's grid columns in style.css.
+    /**
+     * A labelled cell of a table row. On a wide screen the label is hidden
+     * and the control sits in the table's column (the cell is display:
+     * contents); on a phone the row stacks and the label shows above the
+     * control, since the column headings are hidden there.
+     */
+    const cell = (label, control) => el('label', { class: 'cell' }, el('span', { class: 'lbl', text: label }), control);
+
     const skillRow = (block, s) => {
         const total = el('output', { class: 'total' });
         const row = el('div', { class: 'list-row skill-row' },
-            el('input', { type: 'text', placeholder: 'Skill (e.g. Expertise: Science)', value: s.name, oninput: (e) => { s.name = e.target.value; touch(block); } }),
-            selectField(SKILL_ABILITIES, s.ability, (v) => { s.ability = v; touch(block); row._refresh(block); }, '\u2014'),
-            numberField(RANGES.pp, s.ranks, (v) => { s.ranks = v; touch(block); row._refresh(block); renderPP(block); renderList(); }),
-            total,
+            el('input', { class: 'fit', type: 'text', placeholder: 'Skill (e.g. Expertise: Science)', value: s.name, oninput: (e) => { s.name = e.target.value; touch(block); } }),
+            cell('Ability', selectField(SKILL_ABILITIES, s.ability, (v) => { s.ability = v; touch(block); row._refresh(block); }, '\u2014')),
+            cell('Ranks', numberField(RANGES.pp, s.ranks, (v) => { s.ranks = v; touch(block); row._refresh(block); renderPP(block); renderList(); })),
+            cell('Total', total),
         );
         row._refresh = (b) => { total.textContent = (skillTotal(b, s) >= 0 ? '+' : '') + skillTotal(b, s); };
         row._refresh(block);
-        row.append(removeButton(block, block.skills, s, row));
+        row.append(rowTools(block, block.skills, s, row));
         return row;
     };
 
     const advantageRow = (block, a) => {
         const row = el('div', { class: 'list-row advantage-row' },
-            el('input', { type: 'text', placeholder: 'Advantage', value: a.name, oninput: (e) => { a.name = e.target.value; touch(block); renderEquipment(block); } }),
+            el('input', { class: 'fit', type: 'text', placeholder: 'Advantage', value: a.name, oninput: (e) => { a.name = e.target.value; touch(block); renderEquipment(block); } }),
             numberField(RANGES.pp, a.rank, (v) => { a.rank = v; touch(block); renderPP(block); renderList(); renderEquipment(block); }),
-            el('input', { class: 'note', type: 'text', placeholder: 'Note (what it does, which skill or attack\u2026)', value: a.note || '', oninput: (e) => { a.note = e.target.value; touch(block); } }),
+            el('textarea', { class: 'note', rows: '1', placeholder: 'Note (what it does, which skill or attack\u2026)', oninput: (e) => { a.note = e.target.value; touch(block); } }, a.note || ''),
         );
-        row.append(removeButton(block, block.advantages, a, row));
+        row.append(rowTools(block, block.advantages, a, row));
         return row;
     };
 
     const offenseRow = (block, o) => {
         const row = el('div', { class: 'list-row offense-row' },
-            el('input', { type: 'text', placeholder: 'Attack (e.g. Unarmed)', value: o.name, oninput: (e) => { o.name = e.target.value; touch(block); } }),
-            numberField(RANGES.abilities, o.bonus, (v) => { o.bonus = v; touch(block); }),
-            selectField(OFFENSE_RANGES, o.range, (v) => { o.range = v; touch(block); }),
-            el('input', { class: 'note', type: 'text', placeholder: 'Effect (e.g. Damage 2)', value: o.effect, oninput: (e) => { o.effect = e.target.value; touch(block); } }),
+            el('input', { class: 'fit', type: 'text', placeholder: 'Attack (e.g. Unarmed)', value: o.name, oninput: (e) => { o.name = e.target.value; touch(block); } }),
+            cell('Bonus', numberField(RANGES.abilities, o.bonus, (v) => { o.bonus = v; touch(block); })),
+            cell('Range', selectField(OFFENSE_RANGES, o.range, (v) => { o.range = v; touch(block); })),
+            cell('Damage', numberField(RANGES.pp, o.damage, (v) => { o.damage = v; touch(block); })),
+            cell('Resisted by', selectField(RESIST_TYPES, o.resist, (v) => { o.resist = v; touch(block); }, '\u2014')),
+            el('textarea', { class: 'note', rows: '1', placeholder: 'Effect (optional: Affliction 5 (Dazed, Stunned), Multiattack\u2026)', oninput: (e) => { o.effect = e.target.value; touch(block); } }, o.effect || ''),
         );
-        row.append(removeButton(block, block.offense, o, row));
+        row.append(rowTools(block, block.offense, o, row));
         return row;
     };
 
     const complicationRow = (block, c) => {
         const row = el('div', { class: 'list-row' },
-            el('input', { class: 'grow', type: 'text', placeholder: 'Complication (e.g. Motivation: Justice)', value: c.name, oninput: (e) => { c.name = e.target.value; touch(block); } }),
+            el('input', { class: 'grow fit', type: 'text', placeholder: 'Complication (e.g. Motivation: Justice)', value: c.name, oninput: (e) => { c.name = e.target.value; touch(block); } }),
         );
-        row.append(removeButton(block, block.complications, c, row));
+        row.append(rowTools(block, block.complications, c, row));
         row.append(el('textarea', { class: 'note', rows: '1', placeholder: 'How it plays out for this character', oninput: (e) => { c.note = e.target.value; touch(block); } }, c.note || ''));
         return row;
     };
@@ -1721,7 +2393,7 @@
     const renderEquipment = (block) => {
         const ep = computeEP(block);
         const section = $('#equipment-section');
-        section.hidden = ep.rank === 0;
+        section.hidden = ep.rank === 0 || !typeShows(section, block.type);   // minions have no equipment section
         $('#ep-rank').textContent = ep.rank;
         $('#ep-total').textContent = ep.total;
         $('#ep-spent').textContent = ep.spent;
@@ -1732,11 +2404,11 @@
 
     const equipmentRow = (block, e) => {
         const row = el('div', { class: 'list-row equipment-row' },
-            el('input', { type: 'text', placeholder: 'Item (e.g. Pistol)', value: e.name, oninput: (ev) => { e.name = ev.target.value; touch(block); } }),
+            el('input', { class: 'fit', type: 'text', placeholder: 'Item (e.g. Pistol)', value: e.name, oninput: (ev) => { e.name = ev.target.value; touch(block); } }),
             numberField(RANGES.pp, e.cost, (v) => { e.cost = v; touch(block); renderEquipment(block); }),
-            el('input', { class: 'note', type: 'text', placeholder: 'Note (effect, features\u2026)', value: e.note || '', oninput: (ev) => { e.note = ev.target.value; touch(block); } }),
+            el('textarea', { class: 'note', rows: '1', placeholder: 'Note (effect, features\u2026)', oninput: (ev) => { e.note = ev.target.value; touch(block); } }, e.note || ''),
         );
-        row.append(removeButton(block, block.equipment, e, row));
+        row.append(rowTools(block, block.equipment, e, row));
         return row;
     };
 
@@ -1762,7 +2434,7 @@
         },
         offense: {
             container: '#offense', list: (b) => b.offense, row: offenseRow,
-            blank: () => ({ name: '', bonus: 0, range: 'Close', effect: '' }),
+            blank: () => ({ name: '', bonus: 0, range: 'Close', damage: 0, resist: 'Toughness', effect: '' }),
         },
         complications: {
             container: '#complications', list: (b) => b.complications, row: complicationRow,
@@ -1806,6 +2478,7 @@
         const row = sec.row(block, entry);
         $(sec.container).append(row);
         for (const ta of row.querySelectorAll('textarea')) fitTextarea(ta);
+        for (const input of row.querySelectorAll('input.fit')) fitName(input);
         touch(block); renderPP(block); renderList(); renderEquipment(block);
         row.querySelector('input[type="text"]')?.focus();
     };

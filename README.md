@@ -23,8 +23,21 @@ dependencies. Runs in any browser and installs to a phone's home screen.
 - Everything lives in one JavaScript object: `{ version: 1, blocks: [...] }`.
 - Every edit updates that object and, 300 ms later, writes it to the
   browser's `localStorage` under the key `statblocks.v1`. Nothing is sent anywhere.
-- **Export** writes the same object to a file named like `statblocks-2026-10-17.json`.
-  On phones it opens the share sheet so you can save to Files or OneDrive.
+- **Export** writes the same object to a file. The name is today's date,
+  `statblocks-2026-10-17.json`, unless the data was imported from a file: then
+  that file's name carries on with a counter, so `heroes.json` in gives
+  `heroes (1).json`, then `heroes (2).json`, and `heroes (2).json` in gives
+  `heroes (3).json`. (The name and counter are kept as `file` next to
+  `blocks`.) On phones Export opens the share sheet so you can save to Files
+  or OneDrive.
+- **Save** (Chrome and Edge on a PC only; the button is hidden elsewhere)
+  writes to the same `.json` file every time instead of making a new one. The
+  first press opens a file dialog, suggesting the imported file's name so you
+  can overwrite it; later presses write silently, and after that first press
+  every edit is written to the file as well, so the file always matches the
+  app. The file is remembered across reloads (as a handle in the browser's
+  IndexedDB); the browser just asks once per session, on the first press, for
+  permission to write it. Clearing the site's data forgets the file.
 - **Import** reads such a file and asks whether to replace your current blocks
   or merge them. When merging, a block with the same id wins if it was edited
   more recently.
@@ -34,8 +47,12 @@ Each block looks like this:
 ```json
 {
   "id": "9d7d3e56-666c-4cef-a154-407996578592",
+  "type": "sheet",
   "name": "Doc Nova",
   "pl": 12,
+  "heroPoints": 1,
+  "identity": { "realName": "Nora Vale", "status": "Secret", "player": "Sam", "occupation": "Physicist", "group": "", "base": "Emerald City", "gender": "F", "age": "31", "height": "5'9\"", "weight": "140 lbs", "eyes": "Brown", "hair": "Black" },
+  "background": { "appearance": "", "personality": "", "history": "" },
   "abilities": { "STR": 8, "STA": 0, "AGL": 0, "DEX": 0, "FGT": 0, "INT": 0, "AWE": 0, "PRE": 0 },
   "defenses": { "Dodge": 0, "Parry": 0, "Fortitude": 0, "Toughness": 12, "Will": 0 },
   "initiative": 0,
@@ -46,13 +63,19 @@ Each block looks like this:
   "powers": [{ "name": "Flight", "rank": 6, "desc": "Wings; Subtle", "cost": 12, "perRank": 2 }],
   "skills": [{ "name": "Perception", "ability": "AWE", "ranks": 6 }],
   "advantages": [{ "name": "Evasion", "rank": 2, "note": "" }],
-  "offense": [{ "name": "Unarmed", "bonus": 10, "range": "Close", "effect": "Damage 2" }],
+  "offense": [{ "name": "Unarmed", "bonus": 10, "range": "Close", "damage": 2, "resist": "Toughness", "effect": "" }],
   "complications": [{ "name": "Motivation: Justice", "note": "" }],
   "equipment": [{ "name": "Pistol", "cost": 8, "note": "Ranged Damage 3" }],
   "notes": "",
   "updated": 1760702400000
 }
 ```
+
+`type` is one of `sheet` (full character sheet), `block` (the standard stat
+block, and the default for saves that predate kinds) or `minion` (the short
+block for goons). It only changes which sections the editor shows: every block
+carries every field, so switching kinds never loses anything. `heroPoints`,
+`identity` and `background` are shown for sheets only.
 
 ## manifest.json, field by field
 
@@ -92,6 +115,38 @@ served over HTTPS. GitHub Pages is a free way to do that.
 - **Add a field:** add it to `blankBlock()` in `app.js`, add an input with a
   matching `name=""` to the form in `index.html`, and add it to the list of
   text keys in `renderEditor()` if it is free text.
+- **Attacks:** an offense entry has its `damage` rank, what that is
+  `resist`ed by (Toughness, Fortitude, Will, Dodge or nothing) and an
+  optional `effect` text for anything else (an affliction, a modifier). The
+  play view shows "Damage 3" with the resistance DC: Toughness 15 + rank,
+  anything else 10 + rank. A save from before these fields existed gets the
+  damage read out of its effect text ("Damage 3" becomes damage 3, Toughness,
+  with the text cleared) on load.
+- **Reordering:** every list row (powers, skills, advantages, equipment,
+  attacks, complications) has a grab handle next to its remove button. Drag
+  it with the mouse or a finger, or focus it and press the arrow keys; the
+  entry moves in the block's array, so the play view follows.
+- **Play view:** the Play button in the editor shows the open block as a
+  one-screen sheet for the table (`renderPlay` in `app.js`, section 5c):
+  abilities and defenses as big boxes (Dodge and Parry with their defense
+  class, and adjusted for Vulnerable, Defenseless and bruises), counters for
+  bruises and hero points, the active conditions as pills with "+ Condition"
+  and Clear, and tabs for attacks (with the defense they are checked against
+  and the effect's resistance DC), powers, skills, advantages, equipment,
+  complications, notes and background. Everything else is read-only there;
+  Edit goes back to the form. The view mode is remembered under
+  `statblocks.view` in localStorage.
+- **Sort orders:** the dropdown beside the search box offers the entries of
+  `SORTS` in `app.js` (name, kind, power level, last edited, "in trouble" =
+  most bruises and conditions first). Add one there and as an `<option>` with
+  the same value in `index.html`. The choice is kept under `statblocks.sort`
+  in localStorage, separate from the blocks.
+- **Kinds of block:** `TYPES` in `app.js` lists them (`sheet`, `block`,
+  `minion`). A section in `index.html` with `data-types="sheet block"` is shown
+  for those kinds only; one without the attribute is shown for all. "+ New"
+  asks for the kind; the dropdown next to PL changes it later. For minions
+  the Notes box is relabelled "Traits & notes" and the sidebar skips the
+  overspend badge, since they have no power point section.
 - **Number ranges:** abilities, defenses and initiative run -999 to 999; PL
   and bruises 0 to 999. The limits are in `RANGES` at the top of `app.js`; the
   inputs use them as min/max, values typed or imported outside them are
