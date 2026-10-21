@@ -1,0 +1,12 @@
+{
+  "name": "statblocks-tests",
+  "private": true,
+  "type": "module",
+  "description": "Playwright checks for the Stat Block Tracker (not part of the app)",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.54.2"
+  }
+}

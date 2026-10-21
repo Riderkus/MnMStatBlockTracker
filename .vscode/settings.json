@@ -1,0 +1,15 @@
+{
+    // Live Server reloads every open copy of the app (PC and phone alike)
+    // whenever a file in this folder changes. The Save button writes the
+    // stat block .json file, so without this every save reloaded the page
+    // mid-write and exports came out doubled. Ignoring .json files keeps the
+    // live reload for the app's own files only. (The first four entries are
+    // Live Server's defaults, kept so nothing else changes.)
+    "liveServer.settings.ignoreFiles": [
+        ".vscode/**",
+        "**/*.scss",
+        "**/*.sass",
+        "**/*.ts",
+        "**/*.json"
+    ]
+}

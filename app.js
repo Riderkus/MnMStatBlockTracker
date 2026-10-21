@@ -58,6 +58,7 @@
         pl: { min: 0, max: 999 },
         pp: { min: 0, max: 9999 },   // power point fields
         heroPoints: { min: 0, max: 999 },
+        minions: { min: 1, max: 999 },   // how many minions one block stands for
     };
 
     // The three kinds of block. The key is what is saved in block.type; the
@@ -74,6 +75,8 @@
     const TYPE_TAG = { sheet: 'Sheet', minion: 'Minion' };
     /** Minions have no power point section, so there is nothing to overspend. */
     const tracksPP = (block) => block.type !== 'minion';
+    /** Minions take no bruises: any failed resistance check gives them the worst degree (p. 245). */
+    const tracksBruises = (block) => block.type !== 'minion';
 
     // The text fields of the two character-sheet-only sections, with their
     // defaults. Also used by migrate() to fill gaps in older saves.
@@ -95,7 +98,11 @@
     // What an attack's damage is resisted with. Damage is a Toughness check
     // against DC 15 + rank; another defense makes it DC 10 + rank (p. 246).
     const RESIST_TYPES = ['Toughness', 'Fortitude', 'Will', 'Dodge'];
-    const resistDC = (o) => (o.resist ? (o.resist === 'Toughness' ? 15 : 10) + (o.damage || 0) : null);
+    // An attack is either Damage (resistance DC 15 + rank, normally Toughness)
+    // or some other effect such as an Affliction (DC 10 + rank). The rank is
+    // kept in `damage` either way (the field's old name).
+    const ATTACK_KINDS = { damage: 'Damage', effect: 'Effect' };
+    const resistDC = (o) => (o.resist ? (o.kind === 'effect' ? 10 : 15) + (o.damage || 0) : null);
     const EP_PER_RANK = 5;   // the Equipment advantage: 5 equipment points per rank (p. 130)
 
     /**
@@ -438,7 +445,9 @@
         type: 'block',             // 'sheet' | 'block' | 'minion' (see TYPES)
         name: '',
         pl: 10,                    // Power Level
+        portrait: '',              // optional picture: a small JPEG as a data: URL (see section 6b)
         heroPoints: 1,             // character sheets: hero points in hand (players start a session with 1)
+        minions: { count: 1, down: 0 },   // minions: how many this block stands for, and how many of them are down
         identity: blankIdentity(), // character sheets: real name, player, height... (see blankIdentity)
         background: blankBackground(),   // character sheets: appearance, personality, history
         // { STR: 0, STA: 0, ... } built from the ABILITIES array
@@ -456,7 +465,7 @@
         // Lists, one object per entry (see the row builders in section 5b):
         skills: [],                // { name, ability: 'AGL' | '', ranks }
         advantages: [],            // { name, rank, note }
-        offense: [],               // { name, bonus, range: 'Close' | 'Ranged' | 'Perception', damage, resist: 'Toughness' | 'Fortitude' | 'Will' | 'Dodge' | '', effect (optional text) }
+        offense: [],               // { name, bonus, range: 'Close' | 'Ranged' | 'Perception', kind: 'damage' | 'effect', damage (the rank), resist: 'Toughness' | 'Fortitude' | 'Will' | 'Dodge' | '', effect (optional text) }
         complications: [],         // { name, note }
         equipment: [],             // { name, cost, note } — only shown while an Equipment advantage is in the list
         notes: '',                 // free text
@@ -494,6 +503,7 @@
     let fileHandle = null;
     let filePermitted = false;
     let fileWrite = Promise.resolve();
+    let fileDirty = false;   // true while the app has changes the linked file does not
 
     /** Read the saved state from localStorage, if there is one. */
     const load = () => {
@@ -513,8 +523,10 @@
             localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
             setStatus('Saved');
             // A .json file linked with the Save button is kept up to date too
-            // (section 7b), once this session has been allowed to write it.
+            // (section 7b), once this session has been allowed to write it;
+            // until then the Save button shows a dot for the changes it is missing.
             if (fileHandle && filePermitted) queueFileWrite();
+            else if (fileHandle) setFileDirty(true);
         } catch (err) {
             console.error(err);
             setStatus('Could not save (storage full or blocked)');
@@ -564,6 +576,9 @@
                 // Kind of block: saves from before there were kinds are ordinary blocks.
                 b.type = TYPES[b.type] ? b.type : 'block';
                 b.heroPoints = clampTo(RANGES.heroPoints, b.heroPoints ?? 1);
+                b.portrait = (typeof b.portrait === 'string' && b.portrait.startsWith('data:image/')) ? b.portrait : '';
+                const count = clampTo(RANGES.minions, b.minions?.count ?? 1);
+                b.minions = { count, down: Math.min(count, clampTo(RANGES.bruises, b.minions?.down)) };
                 b.identity = textObject(blankIdentity(), b.identity);
                 b.background = textObject(blankBackground(), b.background);
                 b.conditions = normalizeConditions(b.conditions, b.conditionDetails);
@@ -602,7 +617,10 @@
                         }
                         if (resist == null) resist = Number(damage) > 0 ? 'Toughness' : '';
                     }
-                    return { name: String(e?.name ?? ''), bonus: clampTo(RANGES.abilities, e?.bonus), range: OFFENSE_RANGES.includes(e?.range) ? e.range : 'Close', damage: clampTo(RANGES.pp, damage), resist: RESIST_TYPES.includes(resist) ? resist : '', effect };
+                    // Kind: saves from before it existed are Damage, unless the rank
+                    // was resisted by something other than Toughness (an affliction).
+                    const kind = ATTACK_KINDS[e?.kind] ? e.kind : (resist && resist !== 'Toughness' ? 'effect' : 'damage');
+                    return { name: String(e?.name ?? ''), bonus: clampTo(RANGES.abilities, e?.bonus), range: OFFENSE_RANGES.includes(e?.range) ? e.range : 'Close', kind, damage: clampTo(RANGES.pp, damage), resist: RESIST_TYPES.includes(resist) ? resist : '', effect };
                 });
                 b.complications = listify(b.complications, textToComplications, (e) => ({ name: String(e?.name ?? ''), note: String(e?.note ?? '') }));
                 b.equipment = listify(b.equipment, () => [], (e) => ({ name: String(e?.name ?? ''), cost: clampTo(RANGES.pp, e?.cost), note: String(e?.note ?? '') }));
@@ -663,6 +681,7 @@
     const emptyHint = $('#empty-hint');   // "No stat blocks yet" message
     const searchEl = $('#search');        // search box above the list
     const sortEl = $('#sort');            // sort order dropdown next to it
+    const kindEl = $('#kind');            // "show only this kind" dropdown
     const statusEl = $('#save-status');   // "Saved" / "Saving…" text in the footer
 
     /** Show a short message in the editor footer. */
@@ -867,6 +886,14 @@
         $('#pp-defenses').textContent = pp.defenses;
         $('#pp-powers').textContent = pp.powers;
         $('#pp-skills').textContent = pp.skills;
+        // The total ranks behind that figure, and a word when the total is odd
+        // (1 point buys 2 ranks, so an odd total rounds up: one rank unpaired).
+        const ranks = block.skills.reduce((n, s) => n + (s.ranks || 0), 0);
+        const note = $('#pp-skills-note');
+        note.textContent = ranks === 0 ? '1 per 2 ranks, from the Skills list'
+            : ranks % 2 ? `${ranks} ranks, 1 point per 2: one rank unpaired, the half point rounds up`
+            : `${ranks} ranks, 1 point per 2`;
+        note.classList.toggle('odd', ranks % 2 === 1);
         $('#pp-advantages').textContent = pp.advantages;
         $('#pp-spent').textContent = pp.spent;
         const left = $('#pp-left');
@@ -896,22 +923,25 @@
         pl: (a, b) => b.pl - a.pl || byName(a, b),                              // highest power level first
         recent: (a, b) => b.updated - a.updated || byName(a, b),                // most recently edited first
         // "In trouble": the most battered first: bruises plus active conditions.
-        conditions: (a, b) => (b.conditions.length + b.bruises) - (a.conditions.length + a.bruises) || byName(a, b),
+        conditions: (a, b) => (b.conditions.length + b.bruises + b.minions.down) - (a.conditions.length + a.bruises + a.minions.down) || byName(a, b),
     };
     const SORT_KEY = 'statblocks.sort';   // where the chosen order is remembered
+    const KIND_KEY = 'statblocks.kind';   // and the kind filter
 
     /** Rebuild the sidebar list, applying the search filter and the chosen sort order. */
     const renderList = () => {
         const q = searchEl.value.trim().toLowerCase();
+        const kind = TYPES[kindEl.value] ? kindEl.value : '';
         const blocks = state.blocks
-            .filter((b) => !q || b.name.toLowerCase().includes(q))
+            .filter((b) => (!q || b.name.toLowerCase().includes(q)) && (!kind || b.type === kind))
             .sort(SORTS[sortEl.value] || SORTS.name);
 
         listEl.replaceChildren(...blocks.map((b) => {
             // Small badges under the name: bruise count plus every active condition.
             // They wrap onto extra lines in the CSS, so there is no need to cap them.
             const badges = el('div', { class: 'badges' });
-            if (b.bruises > 0) badges.append(el('span', { class: 'badge', text: `Bruised ×${b.bruises}` }));
+            if (b.bruises > 0 && tracksBruises(b)) badges.append(el('span', { class: 'badge', text: `Bruised ×${b.bruises}` }));
+            if (b.type === 'minion' && b.minions.down > 0) badges.append(el('span', { class: 'badge', text: b.minions.down >= b.minions.count ? 'All down' : `${b.minions.down} of ${b.minions.count} down` }));
             for (const c of b.conditions) {
                 let detail = b.conditionDetails[c];
                 // For toggle-type details (Unaware), picking every option means
@@ -930,12 +960,13 @@
                 onclick: () => select(b.id),
             },
                 el('div', {},
+                    ...(b.portrait ? [el('img', { class: 'thumb', src: b.portrait, alt: '' })] : []),
                     el('div', { class: 'name', text: b.name || '(unnamed)' }),
                     // Just the PL; the only power point fact worth seeing from
                     // the list is an overspend, shown as a small red badge.
                     // A short tag for sheets and minions in front of the PL.
                     el('div', { class: 'meta' },
-                        ...(TYPE_TAG[b.type] ? [el('span', { class: 'type-tag', text: TYPE_TAG[b.type] })] : []),
+                        ...(TYPE_TAG[b.type] ? [el('span', { class: 'type-tag', text: TYPE_TAG[b.type] + (b.type === 'minion' && b.minions.count > 1 ? ` \u00d7${b.minions.count}` : '') })] : []),
                         document.createTextNode(`PL ${b.pl}`),
                         ...(tracksPP(b) && computePP(b).left < 0 ? [el('span', { class: 'badge over', text: '!', 'data-over': `${-computePP(b).left} power points over`, 'aria-label': `${-computePP(b).left} power points over` })] : []),
                     ),
@@ -1079,6 +1110,8 @@
         form.elements.initiative.value = withPlus(block.initiative);
         form.elements.bruises.value = block.bruises;
         form.elements.heroPoints.value = block.heroPoints;
+        renderPortrait(block);
+        $('#f-minions').value = block.minions.count;
 
         // Identity and background fields (character sheets): data-text="identity.realName".
         for (const input of form.querySelectorAll('[data-text]')) {
@@ -1170,13 +1203,64 @@
         select(copy.id);
     };
 
+    /**
+     * The undo bar: a line of text and an Undo button, shown for a few
+     * seconds after something that used to need a confirm box. `action`
+     * runs if Undo is pressed in time. Only one offer at a time.
+     */
+    const undoBar = $('#undo-bar');
+    let undoAction = null, undoTimer = null;
+    const UNDO_MS = 8000;
+    const hideUndo = () => { undoBar.hidden = true; undoAction = null; clearTimeout(undoTimer); };
+    const offerUndo = (text, action) => {
+        clearTimeout(undoTimer);
+        undoAction = action;
+        $('#undo-text').textContent = text;
+        undoBar.hidden = false;
+        undoTimer = setTimeout(hideUndo, UNDO_MS);
+    };
+    $('#btn-undo').addEventListener('click', () => { const action = undoAction; hideUndo(); if (action) action(); });
+
     const deleteBlock = () => {
         const b = selected();
         if (!b) return;
-        if (!confirm(`Delete "${b.name || '(unnamed)'}"? This cannot be undone.`)) return;
-        state.blocks = state.blocks.filter((x) => x.id !== b.id);   // keep every OTHER block
+        if (!confirm(`Delete "${b.name || '(unnamed)'}"?`)) return;
+        const at = state.blocks.indexOf(b);
+        state.blocks = state.blocks.filter((x) => x !== b);   // keep every OTHER block
         scheduleSave();
         select(null);
+        // And a few seconds to change your mind after all.
+        offerUndo(`Deleted ${b.name || '(unnamed)'}`, () => {
+            state.blocks.splice(Math.min(at, state.blocks.length), 0, b);
+            scheduleSave();
+            select(b.id);
+        });
+    };
+
+    /**
+     * Everything in the Conditions section back to normal, with an Undo
+     * offer. `after` redraws whatever view asked (the play view's pills).
+     */
+    const clearConditions = (block, after = () => {}) => {
+        if (!block.conditions.length && !block.bruises && !block.minions.down) return;   // nothing to clear
+        const before = { conditions: [...block.conditions], conditionDetails: { ...block.conditionDetails }, bruises: block.bruises, minions: { ...block.minions } };
+        block.minions.down = 0;
+        block.conditions = [];
+        block.conditionDetails = {};
+        block.bruises = 0;
+        form.elements.bruises.value = 0;
+        reconcileConditions(block);   // redraws the chips and detail rows
+        touch(block);
+        renderList();
+        after();
+        offerUndo('Conditions cleared', () => {
+            Object.assign(block, before);
+            form.elements.bruises.value = block.bruises;
+            reconcileConditions(block);
+            touch(block);
+            renderList();
+            if (selected() === block && view === 'play') renderPlay(block);
+        });
     };
 
     /**
@@ -1225,6 +1309,12 @@
             // The kind-of-block dropdown: store it and show/hide the sections.
             if (TYPES[t.value]) block.type = t.value;
             applyType(block);
+        } else if (t.dataset.minions) {
+            // How many minions the block stands for; the down count cannot exceed it.
+            const v = clampTo(RANGES.minions, t.value);
+            block.minions.count = v;
+            block.minions.down = Math.min(block.minions.down, v);
+            if (t.value !== '' && Number(t.value) !== v) t.value = v;
         } else if (t.name in RANGES) {
             // pl, initiative, bruises, hero points: same clamping as the stat boxes.
             const v = clampTo(RANGES[t.name], t.value);
@@ -1284,17 +1374,71 @@
 
     // Wire the remaining buttons to their actions.
     // Clear conditions: everything in the Conditions section back to normal.
-    $('#btn-clear-conditions').addEventListener('click', () => {
+    $('#btn-clear-conditions').addEventListener('click', () => { const block = selected(); if (block) clearConditions(block); });
+
+    /* -------------------------------------------------------------------------
+     * 6b. PORTRAIT — an optional picture for the block. The chosen image is
+     *     cropped to a centred square and shrunk to 256 px, then stored as a
+     *     small JPEG data: URL right in the block (so it travels with
+     *     exports and needs no file access). A few hundred blocks with
+     *     portraits still fit comfortably in the browser's storage.
+     * ---------------------------------------------------------------------- */
+    const PORTRAIT_SIZE = 256;
+    const renderPortrait = (block) => {
+        const has = Boolean(block.portrait);
+        const img = $('#portrait-img');
+        img.src = has ? block.portrait : '';
+        img.hidden = !has;
+        $('#portrait-plus').hidden = has;
+        $('#btn-portrait-remove').hidden = !has;
+        $('#portrait').classList.toggle('has', has);   // small dashed square, or the picture at full size
+        $('#btn-portrait').setAttribute('aria-label', has ? 'Show the portrait larger' : 'Pick a portrait');
+    };
+    // The enlarged portrait: a tap on the picture opens it, a tap anywhere closes it.
+    const lightbox = $('#lightbox');
+    const openLightbox = (src) => { $('#lightbox-img').src = src; lightbox.showModal(); };
+    lightbox.addEventListener('click', () => lightbox.close());
+    $('#play-portrait').addEventListener('click', () => { const b = selected(); if (b?.portrait) openLightbox(b.portrait); });
+    /** Reads an image file and returns it as a square 256px JPEG data: URL. */
+    const toPortrait = (file) => new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+            const side = Math.min(img.naturalWidth, img.naturalHeight);
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = PORTRAIT_SIZE;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#fff';                       // behind any transparency
+            ctx.fillRect(0, 0, PORTRAIT_SIZE, PORTRAIT_SIZE);
+            ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, PORTRAIT_SIZE, PORTRAIT_SIZE);
+            URL.revokeObjectURL(url);
+            resolve(canvas.toDataURL('image/jpeg', 0.82));
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('not an image')); };
+        img.src = url;
+    });
+    $('#btn-portrait').addEventListener('click', () => {
+        const block = selected();
+        if (block?.portrait) openLightbox(block.portrait);   // with a picture: enlarge it
+        else $('#file-portrait').click();                    // without: pick one
+    });
+    $('#file-portrait').addEventListener('change', async (e) => {
+        const block = selected();
+        const file = e.target.files[0];
+        e.target.value = '';   // so picking the same file again still counts
+        if (!block || !file) return;
+        try {
+            block.portrait = await toPortrait(file);
+            touch(block); renderPortrait(block); renderList();
+        } catch {
+            setStatus('That file is not an image the browser can read');
+        }
+    });
+    $('#btn-portrait-remove').addEventListener('click', () => {
         const block = selected();
         if (!block) return;
-        if (!block.conditions.length && !block.bruises) return;   // nothing to clear
-        block.conditions = [];
-        block.conditionDetails = {};
-        block.bruises = 0;
-        form.elements.bruises.value = 0;
-        reconcileConditions(block);   // redraws the chips and detail rows
-        touch(block);
-        renderList();
+        block.portrait = '';
+        touch(block); renderPortrait(block); renderList();
     });
 
     // "+ New" asks which kind of block to make (the chooser dialog), then
@@ -1316,6 +1460,11 @@
     try { if (SORTS[localStorage.getItem(SORT_KEY)]) sortEl.value = localStorage.getItem(SORT_KEY); } catch { /* ignore */ }
     sortEl.addEventListener('change', () => {
         try { localStorage.setItem(SORT_KEY, sortEl.value); } catch { /* ignore */ }
+        renderList();
+    });
+    try { if (TYPES[localStorage.getItem(KIND_KEY)]) kindEl.value = localStorage.getItem(KIND_KEY); } catch { /* ignore */ }
+    kindEl.addEventListener('change', () => {
+        try { localStorage.setItem(KIND_KEY, kindEl.value); } catch { /* ignore */ }
         renderList();
     });
 
@@ -1451,9 +1600,17 @@
         kvDb().then((db) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(value, key); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); }).catch(reject);
     });
 
-    /** The button's tooltip names the linked file, if there is one. */
+    /** The button's tooltip names the linked file, if there is one, and whether it is behind. */
     const showFileName = () => {
-        saveBtn.title = fileHandle ? `Save to ${fileHandle.name}` : 'Pick a .json file to save to; later presses overwrite it';
+        saveBtn.title = fileHandle
+            ? `Save to ${fileHandle.name}` + (fileDirty ? ' (the file does not have the latest changes yet)' : '')
+            : 'Pick a .json file to save to; later presses overwrite it';
+    };
+    /** The orange dot on the Save button: on while the linked file is behind the app. */
+    const setFileDirty = (dirty) => {
+        fileDirty = dirty;
+        saveBtn.classList.toggle('dirty', dirty);
+        showFileName();
     };
 
     /** Overwrite the linked file with the current state. */
@@ -1462,6 +1619,7 @@
         await writable.write(JSON.stringify(state, null, 2));
         await writable.close();                                // the write only lands on close
         setStatus(`Saved to ${fileHandle.name}`);
+        setFileDirty(false);
     };
     // Writes are chained so two never overlap (a fast typist and the
     // visibility flush could otherwise race).
@@ -1469,6 +1627,7 @@
         fileWrite = fileWrite.then(writeFile).catch((err) => {
             console.error(err);
             filePermitted = false;   // ask again on the next Save press
+            setFileDirty(true);
             setStatus(`Could not write ${fileHandle?.name || 'the file'}`);
         });
     };
@@ -1501,6 +1660,35 @@
         }
     };
     saveBtn.addEventListener('click', saveToFile);
+
+    /**
+     * "New file": a clean slate. Asks first when there are blocks to lose,
+     * then empties the app and forgets the linked file, so the next save
+     * goes to a new one (on a PC the file dialog opens straight away). The
+     * old blocks and file link are set aside for a few seconds behind Undo.
+     */
+    const newFile = () => {
+        const n = state.blocks.length;
+        if (n && !confirm(`Start a new file? The ${n} block${n === 1 ? '' : 's'} in the app will be removed. Export first if you have not saved them.`)) return;
+        const before = { state, selectedId, fileHandle, filePermitted };
+        state = { version: DATA_VERSION, file: null, blocks: [] };
+        selectedId = null;
+        fileHandle = null;
+        filePermitted = false;
+        setFileDirty(false);
+        kvSet('fileHandle', null).catch(() => { /* not remembered: nothing to forget either */ });
+        persist();
+        render();
+        if (n) offerUndo('New file started', () => {
+            ({ state, selectedId, fileHandle, filePermitted } = before);
+            showFileName();
+            if (fileHandle) kvSet('fileHandle', fileHandle).catch(() => { /* ignore */ });
+            persist();
+            render();
+        });
+        if (FS_SUPPORTED) saveToFile();   // straight on to choosing the new .json file (cancelling is fine)
+    };
+    $('#btn-newfile').addEventListener('click', newFile);
 
     // On start: pick up the handle from last time, if there is one.
     if (FS_SUPPORTED) {
@@ -1722,6 +1910,7 @@
             case 'bruised': { const f = find('Combat checks', (e) => e.name === 'Damage results'); return f && { ...f, title: 'Bruised', text: f.entry.text }; }
             case 'initiative': return find('Combat checks', (e) => e.name === 'Initiative');
             case 'hero': return find('Making checks', (e) => e.name === 'Hero points');
+            case 'minions': return find('Combat checks', (e) => e.name === 'Minions');
             case 'option': {   // "Unaware|Visual" or "Debilitated|STR": an option of a condition's specifier
                 const [cond, opt] = key.split('|');
                 if (ABILITIES.includes(opt)) return find('Ability checks', (e) => e.name.includes(`(${opt})`));
@@ -1773,6 +1962,7 @@
             if (target.querySelector('#f-initiative')) return ['initiative', 'Initiative'];
             if (target.querySelector('#f-bruises')) return ['bruised', 'Bruised'];
             if (target.querySelector('#f-hero')) return ['hero', 'Hero points'];
+            if (target.querySelector('#f-minions')) return ['minions', 'Minions'];
             if (target.querySelector('#f-pp-earned')) return ['pp', 'Earned'];
         }
         if (c.contains('pp-stat') || c.contains('pp-row')) return ['pp', label()];
@@ -2002,7 +2192,7 @@
         if (d === 'Dodge' || d === 'Parry') {
             if (block.conditions.includes('Defenseless')) { v = 0; note = 'defenseless'; }
             else if (block.conditions.includes('Vulnerable')) { v = Math.ceil(v / 2); note = 'vulnerable, halved'; }
-        } else if (d === 'Toughness' && block.bruises > 0) {
+        } else if (d === 'Toughness' && block.bruises > 0 && tracksBruises(block)) {
             v -= block.bruises; note = `-${block.bruises} bruised`;
         }
         return { v, note };
@@ -2035,7 +2225,7 @@
      */
     const attackInfo = (a) => {
         const vs = a.range === 'Close' ? 'vs. Parry' : a.range === 'Ranged' ? 'vs. Dodge' : 'no attack check';
-        const damage = (a.damage || 0) > 0 || a.resist ? `Damage ${a.damage || 0}` : '';
+        const damage = (a.damage || 0) > 0 || a.resist ? `${a.kind === 'effect' ? 'Rank' : 'Damage'} ${a.damage || 0}` : '';
         const dc = resistDC(a);
         return { vs, damage, dc: dc == null ? '' : `${a.resist} DC ${dc}` };
     };
@@ -2055,11 +2245,11 @@
     /** The contents of one tab. */
     const playTabBody = (block, tab) => {
         switch (tab) {
-            case 'offense': return playTable(['Attack', 'Bonus', 'Range', 'Damage', 'Effect'], block.offense.map((a) => {
+            case 'offense': return playTable(['Attack', 'Bonus', 'Range', 'Damage / rank', 'Effect'], block.offense.map((a) => {
                 const { vs, damage, dc } = attackInfo(a);
                 return [[
                     td('name', a.name || '(unnamed)'),
-                    td('num', withPlus(a.bonus || 0), 'Bonus'),
+                    td('num', a.range === 'Perception' ? '\u2014' : withPlus(a.bonus || 0), 'Bonus'),   // nothing is rolled at perception range
                     el('td', { class: 'tag', 'data-lbl': 'Range' }, document.createTextNode(a.range || ''), el('span', { class: 'sub', text: vs })),
                     el('td', { class: 'tag', 'data-lbl': 'Damage' }, document.createTextNode(damage || '\u2014'), ...(dc ? [el('span', { class: 'sub', text: dc })] : [])),
                     td('desc', a.effect || ''),
@@ -2097,6 +2287,9 @@
             if (block.identity.group) sub.push(block.identity.group);
         }
         $('#play-sub').textContent = sub.join(' \u00b7 ');
+        const portrait = $('#play-portrait');
+        portrait.hidden = !block.portrait;
+        portrait.src = block.portrait || '';
 
         // Abilities and defenses. data-group / data-key on the label make the
         // info cards work here the same as on the editor's boxes.
@@ -2111,7 +2304,18 @@
         );
 
         // Counters: bruises always; hero points on sheets; power points as a figure.
-        const counters = [playCounter('Bruises', block.bruises, RANGES.bruises, (v) => { block.bruises = v; form.elements.bruises.value = v; touch(block); renderList(); renderPlay(block); })];
+        const counters = [];
+        if (tracksBruises(block)) {
+            counters.push(playCounter('Bruises', block.bruises, RANGES.bruises, (v) => { block.bruises = v; form.elements.bruises.value = v; touch(block); renderList(); renderPlay(block); }));
+        } else {
+            // One minion block can stand for a whole group: how many there are,
+            // how many are down (a minion that fails a resistance check is simply
+            // out, p. 245), and how many are still up.
+            const g = block.minions;
+            counters.push(playCounter('Minions', g.count, RANGES.minions, (v) => { g.count = v; g.down = Math.min(g.down, v); $('#f-minions').value = v; touch(block); renderList(); renderPlay(block); }));
+            counters.push(playCounter('Down', g.down, { min: 0, max: g.count }, (v) => { g.down = v; touch(block); renderList(); renderPlay(block); }, g.down >= g.count));
+            counters.push(el('div', { class: 'counter' }, document.createTextNode('Up'), el('span', { class: 'val' + (g.count - g.down === 0 ? ' over' : ''), text: g.count - g.down })));
+        }
         if (block.type === 'sheet') counters.push(playCounter('Hero points', block.heroPoints, RANGES.heroPoints, (v) => { block.heroPoints = v; form.elements.heroPoints.value = v; touch(block); renderPlay(block); }));
         if (tracksPP(block)) {
             const pp = computePP(block);
@@ -2139,10 +2343,7 @@
             ...(pills.length ? pills : [el('span', { class: 'play-none', text: 'No conditions' })]),
             // With conditions on, these two step back (class "quiet").
             el('button', { type: 'button', class: 'btn small' + (pills.length ? ' quiet' : ''), text: '+ Condition', onclick: () => openCondPicker(block) }),
-            ...(pills.length || block.bruises ? [el('button', { type: 'button', class: 'btn small' + (pills.length ? ' quiet' : ''), text: 'Clear', onclick: () => {
-                block.conditions = []; block.conditionDetails = {}; block.bruises = 0; form.elements.bruises.value = 0;
-                reconcileConditions(block); touch(block); renderList(); renderPlay(block);
-            } })] : []),
+            ...(pills.length || block.bruises || block.minions.down ? [el('button', { type: 'button', class: 'btn small' + (pills.length ? ' quiet' : ''), text: 'Clear', onclick: () => clearConditions(block, () => renderPlay(block)) })] : []),
         );
 
         // Tabs and the open tab's contents.
@@ -2153,7 +2354,70 @@
             onclick: () => { playTab = key; renderPlay(block); },
         })));
         $('#play-body').replaceChildren(playTabBody(block, playTab));
+        // Keep the open tab's label in view when the tab row scrolls (phones).
+        $('#play-tabs .tab[aria-pressed="true"]')?.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'smooth' });
     };
+
+    /** Open the tab `step` places to the right (+1) or left (-1) of the current one. */
+    const playStepTab = (block, step) => {
+        const tabs = playTabs(block);
+        const i = tabs.findIndex(([k]) => k === playTab);
+        const next = tabs[i + step];
+        if (!next) return;   // already at the first or last tab
+        playTab = next[0];
+        renderPlay(block);
+    };
+
+    // Phones: swipe sideways over a tab's contents to change tab. Touch
+    // events only exist on touch screens, so a mouse never triggers this.
+    // While the finger moves mostly sideways the contents follow it (with
+    // some drag); on release a long enough swipe slides them out and the
+    // next tab's contents in, a short one eases them back. A vertical
+    // move is left to scrolling (the box has touch-action: pan-y), and the
+    // tab row itself is not involved, so it still scrolls on its own.
+    const SWIPE_MIN = 60;     // pixels of sideways travel that count as a swipe
+    const SWIPE_DRAG = 0.4;   // how far the contents follow the finger (fraction of its travel)
+    const playBody = $('#play-body');
+    let swipe = null;         // { x, y, horiz } while a finger is down
+    const bodyTo = (x, opacity, animate) => {
+        playBody.style.transition = animate ? 'transform 0.16s ease-out, opacity 0.16s ease-out' : 'none';
+        playBody.style.transform = x ? `translateX(${x}px)` : '';
+        playBody.style.opacity = opacity;
+    };
+    playBody.addEventListener('touchstart', (e) => {
+        swipe = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY, horiz: null } : null;
+    }, { passive: true });
+    playBody.addEventListener('touchmove', (e) => {
+        if (!swipe) return;
+        const dx = e.touches[0].clientX - swipe.x, dy = e.touches[0].clientY - swipe.y;
+        // Decide once, after a few pixels, whether this is a sideways move.
+        if (swipe.horiz === null) {
+            if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+            swipe.horiz = Math.abs(dx) > Math.abs(dy);
+        }
+        if (swipe.horiz) bodyTo(dx * SWIPE_DRAG, 1, false);
+    }, { passive: true });
+    const endSwipe = (e) => {
+        const block = selected();
+        const t = e.changedTouches[0];
+        const s = swipe;
+        swipe = null;
+        if (!s || !s.horiz || !block || !t) { bodyTo(0, 1, true); return; }
+        const dx = t.clientX - s.x;
+        const step = dx <= -SWIPE_MIN ? 1 : dx >= SWIPE_MIN ? -1 : 0;   // swipe left = the next tab to the right
+        const tabs = playTabs(block);
+        const i = tabs.findIndex(([k]) => k === playTab);
+        if (!step || !tabs[i + step]) { bodyTo(0, 1, true); return; }   // too short, or at the end
+        // Slide the old contents out the way the finger went, swap, slide the new ones in.
+        bodyTo(-step * 48, 0, true);
+        setTimeout(() => {
+            playStepTab(block, step);
+            bodyTo(step * 48, 0, false);
+            requestAnimationFrame(() => requestAnimationFrame(() => bodyTo(0, 1, true)));
+        }, 160);
+    };
+    playBody.addEventListener('touchend', endSwipe, { passive: true });
+    playBody.addEventListener('touchcancel', endSwipe, { passive: true });
 
     // --- "+ Condition": every condition that is not active and not covered by
     // an active one, each with the first line of its rules text, filtered by
@@ -2228,11 +2492,11 @@
         },
     });
 
-    /** A <select> whose options are plain strings; "" shows the placeholder. */
+    /** A <select> whose options are plain strings; "" shows the placeholder. An option may also be [value, label]. */
     const selectField = (options, value, onChange, placeholder) => {
         const sel = el('select', { onchange: (e) => onChange(e.target.value) },
             ...(placeholder ? [el('option', { value: '', text: placeholder })] : []),
-            ...options.map((o) => el('option', { value: o, text: o })),
+            ...options.map((o) => Array.isArray(o) ? el('option', { value: o[0], text: o[1] }) : el('option', { value: o, text: o })),
         );
         sel.value = value || '';
         return sel;
@@ -2358,13 +2622,22 @@
     };
 
     const offenseRow = (block, o) => {
+        const resist = selectField(RESIST_TYPES, o.resist, (v) => { o.resist = v; touch(block); }, '\u2014');
         const row = el('div', { class: 'list-row offense-row' },
             el('input', { class: 'fit', type: 'text', placeholder: 'Attack (e.g. Unarmed)', value: o.name, oninput: (e) => { o.name = e.target.value; touch(block); } }),
             cell('Bonus', numberField(RANGES.abilities, o.bonus, (v) => { o.bonus = v; touch(block); })),
             cell('Range', selectField(OFFENSE_RANGES, o.range, (v) => { o.range = v; touch(block); })),
-            cell('Damage', numberField(RANGES.pp, o.damage, (v) => { o.damage = v; touch(block); })),
-            cell('Resisted by', selectField(RESIST_TYPES, o.resist, (v) => { o.resist = v; touch(block); }, '\u2014')),
-            el('textarea', { class: 'note', rows: '1', placeholder: 'Effect (optional: Affliction 5 (Dazed, Stunned), Multiattack\u2026)', oninput: (e) => { o.effect = e.target.value; touch(block); } }, o.effect || ''),
+            cell('Kind', selectField(Object.entries(ATTACK_KINDS), o.kind, (v) => {
+                o.kind = v;
+                // Damage is a Toughness check; another effect usually Fortitude or
+                // Will. Swap the default along, unless a choice was made already.
+                if (v === 'damage' && o.resist !== 'Toughness') { o.resist = 'Toughness'; resist.value = 'Toughness'; }
+                if (v === 'effect' && o.resist === 'Toughness') { o.resist = 'Fortitude'; resist.value = 'Fortitude'; }
+                touch(block);
+            })),
+            cell('Rank', numberField(RANGES.pp, o.damage, (v) => { o.damage = v; touch(block); })),
+            cell('Resisted by', resist),
+            el('textarea', { class: 'note', rows: '1', placeholder: 'Effect (optional: affliction, extras\u2026)', oninput: (e) => { o.effect = e.target.value; touch(block); } }, o.effect || ''),
         );
         row.append(rowTools(block, block.offense, o, row));
         return row;
@@ -2434,7 +2707,7 @@
         },
         offense: {
             container: '#offense', list: (b) => b.offense, row: offenseRow,
-            blank: () => ({ name: '', bonus: 0, range: 'Close', damage: 0, resist: 'Toughness', effect: '' }),
+            blank: () => ({ name: '', bonus: 0, range: 'Close', kind: 'damage', damage: 0, resist: 'Toughness', effect: '' }),
         },
         complications: {
             container: '#complications', list: (b) => b.complications, row: complicationRow,

@@ -30,6 +30,10 @@ dependencies. Runs in any browser and installs to a phone's home screen.
   `heroes (3).json`. (The name and counter are kept as `file` next to
   `blocks`.) On phones Export opens the share sheet so you can save to Files
   or OneDrive.
+- **New file** empties the app for a clean slate, after asking when there
+  are blocks to lose, and forgets the linked Save file so the next save goes
+  to a new one (on a PC the file dialog opens right away). The old blocks
+  and file link come back with Undo for a few seconds.
 - **Save** (Chrome and Edge on a PC only; the button is hidden elsewhere)
   writes to the same `.json` file every time instead of making a new one. The
   first press opens a file dialog, suggesting the imported file's name so you
@@ -51,6 +55,8 @@ Each block looks like this:
   "name": "Doc Nova",
   "pl": 12,
   "heroPoints": 1,
+  "minions": { "count": 1, "down": 0 },
+  "portrait": "",
   "identity": { "realName": "Nora Vale", "status": "Secret", "player": "Sam", "occupation": "Physicist", "group": "", "base": "Emerald City", "gender": "F", "age": "31", "height": "5'9\"", "weight": "140 lbs", "eyes": "Brown", "hair": "Black" },
   "background": { "appearance": "", "personality": "", "history": "" },
   "abilities": { "STR": 8, "STA": 0, "AGL": 0, "DEX": 0, "FGT": 0, "INT": 0, "AWE": 0, "PRE": 0 },
@@ -63,7 +69,7 @@ Each block looks like this:
   "powers": [{ "name": "Flight", "rank": 6, "desc": "Wings; Subtle", "cost": 12, "perRank": 2 }],
   "skills": [{ "name": "Perception", "ability": "AWE", "ranks": 6 }],
   "advantages": [{ "name": "Evasion", "rank": 2, "note": "" }],
-  "offense": [{ "name": "Unarmed", "bonus": 10, "range": "Close", "damage": 2, "resist": "Toughness", "effect": "" }],
+  "offense": [{ "name": "Unarmed", "bonus": 10, "range": "Close", "kind": "damage", "damage": 2, "resist": "Toughness", "effect": "" }],
   "complications": [{ "name": "Motivation: Justice", "note": "" }],
   "equipment": [{ "name": "Pistol", "cost": 8, "note": "Ranged Damage 3" }],
   "notes": "",
@@ -71,7 +77,9 @@ Each block looks like this:
 }
 ```
 
-`type` is one of `sheet` (full character sheet), `block` (the standard stat
+`portrait` is an optional picture: the chosen image is cropped to a square,
+shrunk to 256 px and stored as a small JPEG data URL, so it travels with
+exports and needs no file access. `type` is one of `sheet` (full character sheet), `block` (the standard stat
 block, and the default for saves that predate kinds) or `minion` (the short
 block for goons). It only changes which sections the editor shows: every block
 carries every field, so switching kinds never loses anything. `heroPoints`,
@@ -110,16 +118,24 @@ wifi, use the PC's local IP address, e.g. `http://192.168.1.20:8080`.
 To install to a phone's home screen (and get offline mode), the app needs to be
 served over HTTPS. GitHub Pages is a free way to do that.
 
+If you serve the folder with VS Code's Live Server instead, note that it
+reloads every open copy of the page whenever a file in the folder changes,
+which includes the `.json` file the Save button writes. `.vscode/settings.json`
+in this folder tells Live Server to ignore `.json` files for that reason.
+
 ## Making changes
 
 - **Add a field:** add it to `blankBlock()` in `app.js`, add an input with a
   matching `name=""` to the form in `index.html`, and add it to the list of
   text keys in `renderEditor()` if it is free text.
-- **Attacks:** an offense entry has its `damage` rank, what that is
+- **Attacks:** an offense entry has a `kind`, `damage` (a Damage effect, DC
+  15 + rank) or `effect` (anything else, such as an Affliction, DC 10 +
+  rank), its rank (kept under the key `damage` for both), what it is
   `resist`ed by (Toughness, Fortitude, Will, Dodge or nothing) and an
-  optional `effect` text for anything else (an affliction, a modifier). The
-  play view shows "Damage 3" with the resistance DC: Toughness 15 + rank,
-  anything else 10 + rank. A save from before these fields existed gets the
+  optional `effect` text. The play view shows "Damage 3" or "Rank 5" with
+  the resistance DC. Switching the kind swaps the default resisting defense
+  (Toughness for damage, Fortitude otherwise). A save without a kind is
+  Damage unless its rank was resisted by something other than Toughness. A save from before these fields existed gets the
   damage read out of its effect text ("Damage 3" becomes damage 3, Toughness,
   with the text cleared) on load.
 - **Reordering:** every list row (powers, skills, advantages, equipment,
@@ -135,7 +151,28 @@ served over HTTPS. GitHub Pages is a free way to do that.
   and the effect's resistance DC), powers, skills, advantages, equipment,
   complications, notes and background. Everything else is read-only there;
   Edit goes back to the form. The view mode is remembered under
-  `statblocks.view` in localStorage.
+  `statblocks.view` in localStorage. On a touch screen a sideways swipe over
+  a tab's contents moves to the next or previous tab.
+- **Undo:** deleting a block (after its confirm box) or clearing its
+  conditions shows an Undo bar for eight seconds (`offerUndo` in `app.js`).
+- **Portrait:** the small dashed square left of the name picks an image.
+  With a picture in place a tap enlarges it and the cross (on hover) removes
+  it; to swap the picture, remove it and pick again. The image is stored as
+  text inside the block (a base64 JPEG data URL, about 8 KB), so it is part
+  of every export and Save file and needs no separate image file.
+- **Minions and bruises:** a minion never takes a bruise (any failed
+  resistance check gives it the worst degree, p. 245), so the Bruises field
+  is hidden for minions. Instead one minion block can stand for a group:
+  `minions.count` is how many (the Number field in the editor, or the
+  Minions counter in the play view) and `minions.down` how many are out,
+  counted with the Down counter in the play view; Up shows the rest. The
+  list shows "Minion ×4" and a "1 of 4 down" badge. Clear brings them all
+  back up.
+- **Save dot:** while a `.json` file is linked but has not received the
+  latest changes (before the first Save press of a session, or after a
+  failed write), the Save button shows an orange dot.
+- **Kind filter:** the dropdown after the sort order shows only sheets,
+  blocks or minions; the choice is kept under `statblocks.kind`.
 - **Sort orders:** the dropdown beside the search box offers the entries of
   `SORTS` in `app.js` (name, kind, power level, last edited, "in trouble" =
   most bruises and conditions first). Add one there and as an `<option>` with
@@ -189,3 +226,28 @@ served over HTTPS. GitHub Pages is a free way to do that.
   "check vs book" tag until you have compared it.
 - **After editing any file:** bump `CACHE_VERSION` in `sw.js`, otherwise
   installed copies keep showing the old version.
+
+## Tests
+
+The `tests/` folder holds Playwright scripts that drive the app in a headless
+Chromium, on a desktop and a phone-sized viewport, and print what they find.
+They are not part of the installed app. To run them:
+
+```
+cd tests
+npm install                      # once: the Playwright package
+npx playwright install chromium  # once: the browser it drives
+node run.mjs                     # every test, or: node run.mjs play swipe
+```
+
+The runner starts `python -m http.server` on port 8765 in the app folder,
+runs each script and stops the server. Screenshots land in `tests/shots/`.
+
+## Rules text
+
+The reference entries and the sample skills, advantages, powers and
+complications are summarised from the Mutants & Masterminds Deluxe Hero's
+Handbook, which is Green Ronin Publishing's. This is a fan-made tool for
+personal use at the table, not an official product; if you publish the app,
+keep the book itself out of the published folder and be aware that the
+publisher can ask for the summaries to be taken down.
